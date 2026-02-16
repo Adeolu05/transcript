@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+youtube-transcript-api
+python-docx
+reportlab
+python-telegram-bot
+python-multipart
+python-dotenv
+webvtt-py
+requests

@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+web/node_modules/
+web/.next/
+vimeo_debug.html
+vimeo_player_debug.html
+output.txt
+test_output.txt
+.venv/
+venv/
+node_modules/
+.next/
+dist/
+build/
+*.log

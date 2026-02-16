@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+@theme {
+  /* Vibrant Color Palette */
+  --color-primary: #fc3b00;
+  --color-primary-hover: #e63500;
+  --color-midnight: #000000;
+  --color-cyan: #00d4ff;
+  --color-purple: #a855f7;
+  --color-pink: #ec4899;
+  --color-yellow: #fbbf24;
+}
+
+/* Premium Foundation */
+body {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-feature-settings: "ss01", "ss02";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #000000;
+  color: #fcfbf9;
+  letter-spacing: -0.01em;
+}
+
+.font-geist {
+  font-family: 'Geist', sans-serif !important;
+}
+
+.font-instrument {
+  font-family: 'Instrument Serif', serif !important;
+}
+
+/* Reveal Animation */
+.reveal-text {
+  animation: reveal 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  opacity: 0;
+  transform: translateY(15px);
+}
+
+@keyframes reveal {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.delay-100 {
+  animation-delay: 0.15s;
+}
+
+.delay-200 {
+  animation-delay: 0.3s;
+}
+
+.delay-300 {
+  animation-delay: 0.45s;
+}
+
+/* Gradient Glow Effect */
+.gradient-glow {
+  position: relative;
+}
+
+.gradient-glow::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 2px;
+  background: linear-gradient(135deg, #00d4ff, #a855f7, #ec4899);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.gradient-glow:hover::before {
+  opacity: 1;
+}
+
+/* Minimal Scrollbar */
+::-webkit-scrollbar {
+  width: 0px;
+}
+
+/* Selection */
+::selection {
+  background: linear-gradient(135deg, #00d4ff, #a855f7);
+  color: #000000;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .border-precision {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .bg-gradient-colorful {
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.1), rgba(168, 85, 247, 0.1), rgba(236, 72, 153, 0.1));
+  }
+}
