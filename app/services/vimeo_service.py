@@ -5,10 +5,11 @@ import webvtt
 from io import StringIO
 from typing import List, Dict, Optional
 
-def get_vimeo_transcript(video_id: str) -> List[Dict]:
+def get_vimeo_transcript(video_id: str, url: str = '') -> Dict:
     """
     Fetches the transcript for a given Vimeo video ID.
     Extracts text tracks from Vimeo player config and parses VTT format.
+    Returns standard PRD struct.
     """
     try:
         # Fetch the Vimeo PLAYER page (not the main video page)
@@ -27,12 +28,16 @@ def get_vimeo_transcript(video_id: str) -> List[Dict]:
         
         html_content = response.text
         
-        # Extract the embedded JSON config from the player HTML
-        # The config is embedded in the HTML as a JSON object
-        # Look for pattern: "text_tracks":[...]
+        # Extract title
+        title_match = re.search(r'<title>([^<]+)</title>', html_content)
+        title = title_match.group(1).replace(" on Vimeo", "") if title_match else f"Vimeo Video {video_id}"
         
-        # Try to find the full config object that contains text_tracks
-        # Pattern: look for large JSON object in script or embedded data
+        # Extract duration
+        duration_match = re.search(r'"duration"\s*:\s*(\d+)', html_content)
+        duration = int(duration_match.group(1)) if duration_match else 0
+        
+        # Extract the embedded JSON config from the player HTML
+        # Look for pattern: "text_tracks":[...]
         config_pattern = r'"text_tracks"\s*:\s*(\[.*?\])'
         match = re.search(config_pattern, html_content, re.DOTALL)
         
@@ -53,9 +58,13 @@ def get_vimeo_transcript(video_id: str) -> List[Dict]:
                 break
         
         # If no English, use the first one
-        if not selected_track:
+        if not selected_track and len(text_tracks) > 0:
             selected_track = text_tracks[0]
-        
+            
+        if not selected_track:
+             raise Exception("No usable text tracks available")
+            
+        language = selected_track.get('lang', 'en')
         vtt_url = selected_track.get('url')
         
         if not vtt_url:
@@ -67,9 +76,17 @@ def get_vimeo_transcript(video_id: str) -> List[Dict]:
         
         # Parse VTT content
         vtt_content = vtt_response.text
-        transcript = parse_vtt(vtt_content)
+        segments = parse_vtt(vtt_content)
         
-        return transcript
+        return {
+            "provider": "vimeo",
+            "source_url": url,
+            "video_id": video_id,
+            "title": title,
+            "language": language,
+            "duration_seconds": duration,
+            "segments": segments
+        }
         
     except requests.RequestException as e:
         if "403" in str(e):

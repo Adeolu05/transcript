@@ -1,5 +1,7 @@
 fastapi
 uvicorn
+pydantic-settings
+sentry-sdk[fastapi]
 youtube-transcript-api
 python-docx
 reportlab

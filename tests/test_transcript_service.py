@@ -7,31 +7,39 @@ class TestTranscriptService(unittest.TestCase):
 
     @patch('app.services.transcript_service.YouTubeTranscriptApi')
     def test_get_transcript_success(self, MockApiClass):
-        # Setup mock - create objects with attributes, not dicts
+        # Setup mock - return dicts to match what the api actually returns
         mock_instance = MockApiClass.return_value
         
-        # Create mock transcript snippet objects
-        from unittest.mock import MagicMock
-        mock_snippet = MagicMock()
-        mock_snippet.text = 'Hello'
-        mock_snippet.start = 0.0
-        mock_snippet.duration = 1.0
+        mock_snippet = {
+            'text': 'Hello',
+            'start': 0.0,
+            'duration': 1.0
+        }
         
         mock_instance.fetch.return_value = [mock_snippet]
 
         # Execute
-        result = get_transcript('test_video_id')
+        with patch('app.services.transcript_service._get_youtube_metadata') as mock_meta:
+            mock_meta.return_value = {"title": "Test Title", "duration": 100}
+            result = get_transcript('test_video_id')
 
         # Verify
         MockApiClass.assert_called_once()
         mock_instance.fetch.assert_called_once_with('test_video_id', languages=['en'])
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]['text'], 'Hello')
-        self.assertEqual(result[0]['start'], 0.0)
-        self.assertEqual(result[0]['duration'], 1.0)
+        
+        self.assertEqual(result['video_id'], 'test_video_id')
+        self.assertEqual(result['title'], 'Test Title')
+        self.assertEqual(result['duration_seconds'], 100)
+        self.assertEqual(result['language'], 'en')
+        self.assertEqual(len(result['segments']), 1)
+        self.assertEqual(result['segments'][0]['text'], 'Hello')
+        self.assertEqual(result['segments'][0]['start'], 0.0)
+        self.assertEqual(result['segments'][0]['duration'], 1.0)
 
+    @patch('app.services.transcript_service._get_youtube_metadata')
     @patch('app.services.transcript_service.YouTubeTranscriptApi')
-    def test_transcripts_disabled(self, MockApiClass):
+    def test_transcripts_disabled(self, MockApiClass, mock_meta):
+        mock_meta.return_value = {"title": "Test", "duration": 0}
         mock_instance = MockApiClass.return_value
         mock_instance.fetch.side_effect = TranscriptsDisabled('test_video_id')
         
@@ -40,8 +48,10 @@ class TestTranscriptService(unittest.TestCase):
         
         self.assertIn("Transcripts are disabled", str(context.exception))
 
+    @patch('app.services.transcript_service._get_youtube_metadata')
     @patch('app.services.transcript_service.YouTubeTranscriptApi')
-    def test_video_unavailable(self, MockApiClass):
+    def test_video_unavailable(self, MockApiClass, mock_meta):
+        mock_meta.return_value = {"title": "Test", "duration": 0}
         mock_instance = MockApiClass.return_value
         mock_instance.fetch.side_effect = VideoUnavailable('test_video_id')
         

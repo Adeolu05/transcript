@@ -14,3 +14,14 @@ node_modules/
 dist/
 build/
 *.log
+.DS_Store
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp.*
+*.local
+*.tmp
+*.db
+*.sqlite
+*.sqlite3
+implementation_plan.md.resolved

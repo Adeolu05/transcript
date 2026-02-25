@@ -25,13 +25,13 @@ export const Generator: React.FC = () => {
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
             setStatus(ProcessingStatus.EXTRACTING);
 
-            const response = await fetch(`${apiUrl}/api/transcript/generate`, {
+            const response = await fetch(`${apiUrl}/api/v1/extract`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     url,
-                    format_type: 'timestamp',
-                    file_format: format,
+                    format: format,
+                    include_timestamps: false,
                 }),
             });
 
@@ -42,15 +42,15 @@ export const Generator: React.FC = () => {
 
             setStatus(ProcessingStatus.FORMATTING);
 
-            const blob = await response.blob();
-            const downloadUrl = window.URL.createObjectURL(blob);
-            setDownloadUrl(downloadUrl);
+            const data = await response.json();
+
+            setDownloadUrl(`${apiUrl}${data.file_download_url}`);
 
             setResult({
                 videoId: extractVideoId(url),
-                title: 'video transcript',
-                segments: [{ start: 0, text: 'complete' }],
-                summary: 'data processed. archival artifact generated.',
+                title: data.video_title || 'video transcript',
+                segments: [], // Raw text isn't returned in the JSON for V1 anymore
+                summary: `processed ${data.word_count} words. archival artifact generated.`,
             });
 
             setStatus(ProcessingStatus.COMPLETE);
@@ -78,18 +78,20 @@ export const Generator: React.FC = () => {
             const a = document.createElement('a');
             a.href = downloadUrl;
             a.download = `transcript.${format}`;
+            document.body.appendChild(a);
             a.click();
+            document.body.removeChild(a);
         }
     };
 
     const isProcessing = [ProcessingStatus.ANALYZING, ProcessingStatus.EXTRACTING, ProcessingStatus.FORMATTING].includes(status);
 
     return (
-        <div className="py-40 px-6 md:px-12 max-w-7xl mx-auto bg-[#000000] relative">
+        <div className="py-20 md:py-28 px-6 md:px-12 max-w-7xl mx-auto bg-[#000000] relative">
             {/* Colorful Background Glow */}
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[60vw] h-[60vw] bg-gradient-to-br from-purple-500/10 via-pink-500/10 to-cyan-500/10 rounded-full blur-[150px] -z-10" />
 
-            <div className="mb-24 flex flex-col md:flex-row justify-between items-start md:items-end gap-10">
+            <div className="mb-16 flex flex-col md:flex-row justify-between items-start md:items-end gap-10">
                 <div className="max-w-xl">
                     <h2 className="md:text-6xl lowercase text-5xl font-semibold bg-gradient-to-r from-purple-400 via-pink-400 to-cyan-400 bg-clip-text text-transparent tracking-tighter mb-4 font-geist">
                         extraction engine
@@ -174,18 +176,11 @@ export const Generator: React.FC = () => {
                                 </div>
                             </div>
 
-                            <div className="flex gap-4 w-full md:w-auto">
-                                <button
-                                    onClick={handleCopy}
-                                    className="flex-1 md:flex-none flex items-center justify-center gap-2 px-10 py-5 bg-transparent border-2 border-purple-500/30 hover:border-purple-400 transition-all text-[10px] uppercase font-bold tracking-widest text-neutral-400 hover:text-white rounded-lg">
-                                    copy raw
-                                </button>
-                                <button
-                                    onClick={handleDownload}
-                                    className="flex-1 md:flex-none flex items-center justify-center gap-2 px-12 py-5 bg-gradient-to-r from-cyan-500 to-purple-500 hover:from-cyan-600 hover:to-purple-600 text-white font-bold text-[10px] uppercase tracking-widest transition-all rounded-lg shadow-[0_0_20px_rgba(0,212,255,0.3)]">
-                                    download archive
-                                </button>
-                            </div>
+                            <button
+                                onClick={handleDownload}
+                                className="flex-1 md:flex-none flex items-center justify-center gap-2 px-12 py-5 bg-gradient-to-r from-cyan-500 to-purple-500 hover:from-cyan-600 hover:to-purple-600 text-white font-bold text-[10px] uppercase tracking-widest transition-all rounded-lg shadow-[0_0_20px_rgba(0,212,255,0.3)] w-full">
+                                download archive
+                            </button>
                         </div>
 
                         <div className="p-10 border-t border-neutral-800">
@@ -199,3 +194,4 @@ export const Generator: React.FC = () => {
         </div>
     );
 };
+

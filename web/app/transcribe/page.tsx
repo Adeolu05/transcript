@@ -10,6 +10,7 @@ export default function TranscribePage() {
     const [fileType, setFileType] = useState<'txt' | 'docx' | 'pdf'>('txt');
     const [loading, setLoading] = useState(false);
     const [downloadUrl, setDownloadUrl] = useState('');
+    const [metadata, setMetadata] = useState<{ title: string, words: number, time: number } | null>(null);
     const [error, setError] = useState('');
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -20,15 +21,15 @@ export default function TranscribePage() {
 
         try {
             const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-            const response = await fetch(`${apiUrl}/api/transcript/generate`, {
+            const response = await fetch(`${apiUrl}/api/v1/extract`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
                     url,
-                    format_type: format,
-                    file_format: fileType,
+                    format: fileType,
+                    include_timestamps: format === 'timestamp',
                 }),
             });
 
@@ -37,10 +38,17 @@ export default function TranscribePage() {
                 throw new Error(errorData.detail || 'Failed to generate transcript');
             }
 
-            // Create a blob from the response
-            const blob = await response.blob();
-            const downloadUrl = window.URL.createObjectURL(blob);
-            setDownloadUrl(downloadUrl);
+            // Consume JSON rather than blob
+            const data = await response.json();
+
+            setMetadata({
+                title: data.video_title,
+                words: data.word_count,
+                time: data.reading_time,
+            });
+
+            setDownloadUrl(`${apiUrl}${data.file_download_url}`);
+
         } catch (err) {
             setError(err instanceof Error ? err.message : 'An error occurred');
         } finally {
@@ -103,8 +111,8 @@ export default function TranscribePage() {
                                         type="button"
                                         onClick={() => setFormat(option.value)}
                                         className={`px-4 py-3 rounded-xl font-medium transition-all ${format === option.value
-                                                ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-lg'
-                                                : 'bg-white border-2 border-gray-200 text-gray-700 hover:border-violet-300'
+                                            ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-lg'
+                                            : 'bg-white border-2 border-gray-200 text-gray-700 hover:border-violet-300'
                                             }`}
                                     >
                                         {option.label}
@@ -129,8 +137,8 @@ export default function TranscribePage() {
                                         type="button"
                                         onClick={() => setFileType(option.value)}
                                         className={`px-4 py-3 rounded-xl font-medium transition-all ${fileType === option.value
-                                                ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-lg'
-                                                : 'bg-white border-2 border-gray-200 text-gray-700 hover:border-violet-300'
+                                            ? 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-lg'
+                                            : 'bg-white border-2 border-gray-200 text-gray-700 hover:border-violet-300'
                                             }`}
                                     >
                                         {option.label}
@@ -164,14 +172,21 @@ export default function TranscribePage() {
                     )}
 
                     {/* Success / Download */}
-                    {downloadUrl && (
+                    {downloadUrl && metadata && (
                         <div className="mt-6 p-6 bg-white rounded-xl shadow-lg border-2 border-green-200">
-                            <div className="flex items-center gap-3 mb-4">
+                            <div className="flex items-center gap-3 mb-4 border-b pb-4">
                                 <CheckCircle2 className="w-6 h-6 text-green-600" />
                                 <h3 className="text-lg font-semibold text-gray-900">
                                     Transcript Ready!
                                 </h3>
                             </div>
+
+                            <div className="mb-6 space-y-2">
+                                <p className="text-gray-700"><strong>Title:</strong> {metadata.title}</p>
+                                <p className="text-gray-700"><strong>Words:</strong> {metadata.words.toLocaleString()}</p>
+                                <p className="text-gray-700"><strong>Est Reading Time:</strong> {Math.ceil(metadata.time / 60)} min</p>
+                            </div>
+
                             <a
                                 href={downloadUrl}
                                 download={`transcript.${fileType}`}

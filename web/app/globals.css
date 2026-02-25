@@ -1,40 +1,157 @@
 @import "tailwindcss";
 
-@theme {
-  /* Vibrant Color Palette */
-  --color-primary: #fc3b00;
-  --color-primary-hover: #e63500;
-  --color-midnight: #000000;
-  --color-cyan: #00d4ff;
-  --color-purple: #a855f7;
-  --color-pink: #ec4899;
-  --color-yellow: #fbbf24;
+/* Transcript Flow — Design Tokens (Modern SaaS Precision)
+   Brand: Anchor Blue (#0F2F57) + Link Cobalt (#2E5C9E)
+   Neutral infrastructure utility. No neon, no hype gradients.
+*/
+
+:root {
+  /* Surfaces */
+  --bg: #f9fafb;
+  --surface: #ffffff;
+  --surface-2: #ffffff;
+  --border: #d1d5db;
+
+  /* Text */
+  --text: #111827;
+  --muted: #6b7280;
+
+  /* Brand */
+  --primary: #0f2f57;
+  --primary-hover: #0b2646;
+  --link: #2e5c9e;
+  --ring: rgba(46, 92, 158, 0.22);
+
+  /* Status */
+  --success: #0d9488;
+  --danger: #dc2626;
+
+  /* Layout */
+  --radius: 12px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
-/* Premium Foundation */
+/* Dark mode for /app (calm, not neon) */
+.dark {
+  --bg: #0b1220;
+  --surface: #111c33;
+  --surface-2: #0b1220;
+  --border: rgba(255, 255, 255, 0.10);
+
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+
+  --primary: #2e5c9e;
+  --primary-hover: #244b82;
+  --link: #7aa6ff;
+  --ring: rgba(122, 166, 255, 0.22);
+
+  --success: #0d9488;
+  --danger: #f87171;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+/* Landing page override (always dark, still consistent) */
+.landing {
+  --bg: #0b1220;
+  --surface: #111c33;
+  --surface-2: #0b1220;
+  --border: rgba(255, 255, 255, 0.10);
+
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+
+  --primary: #2e5c9e;
+  --primary-hover: #244b82;
+  --link: #7aa6ff;
+  --ring: rgba(122, 166, 255, 0.22);
+}
+
+/* Base */
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
 body {
-  font-family: 'Plus Jakarta Sans', sans-serif;
-  font-feature-settings: "ss01", "ss02";
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #000000;
-  color: #fcfbf9;
   letter-spacing: -0.01em;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
-.font-geist {
-  font-family: 'Geist', sans-serif !important;
+/* Links */
+a {
+  color: var(--link);
 }
 
-.font-instrument {
-  font-family: 'Instrument Serif', serif !important;
+a:hover {
+  color: var(--primary);
 }
 
-/* Reveal Animation */
+/* Focus (scoped) */
+:focus-visible {
+  outline: none;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  box-shadow: 0 0 0 4px var(--ring);
+  border-radius: calc(var(--radius) - 4px);
+}
+
+/* Selection */
+::selection {
+  background: rgba(46, 92, 158, 0.18);
+  color: var(--text);
+}
+
+/* Navbar */
+.navbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 50;
+  transition: background 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.navbar--top {
+  background: transparent;
+  border-bottom: 1px solid transparent;
+  box-shadow: none;
+}
+
+.navbar--scrolled {
+  background: rgba(255, 255, 255, 0.85);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.dark .navbar--scrolled,
+.landing .navbar--scrolled {
+  background: rgba(17, 28, 51, 0.82);
+}
+
+/* Landing Animations */
 .reveal-text {
-  animation: reveal 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: reveal 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   opacity: 0;
-  transform: translateY(15px);
+  transform: translateY(12px);
 }
 
 @keyframes reveal {
@@ -45,61 +162,65 @@ body {
 }
 
 .delay-100 {
-  animation-delay: 0.15s;
+  animation-delay: 0.12s;
 }
 
 .delay-200 {
-  animation-delay: 0.3s;
+  animation-delay: 0.24s;
 }
 
 .delay-300 {
-  animation-delay: 0.45s;
+  animation-delay: 0.36s;
 }
 
-/* Gradient Glow Effect */
-.gradient-glow {
+/* Brand outline (rename from gradient-glow if you can) */
+.accent-border {
   position: relative;
 }
 
-.gradient-glow::before {
-  content: '';
+.accent-border::before {
+  content: "";
   position: absolute;
-  inset: -2px;
+  inset: -1px;
   border-radius: inherit;
-  padding: 2px;
-  background: linear-gradient(135deg, #00d4ff, #a855f7, #ec4899);
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(46, 92, 158, 0.65), rgba(15, 47, 87, 0.65));
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   opacity: 0;
-  transition: opacity 0.3s;
+  transition: opacity 0.25s ease;
 }
 
-.gradient-glow:hover::before {
+.accent-border:hover::before {
   opacity: 1;
 }
 
-/* Minimal Scrollbar */
+/* Scrollbar */
 ::-webkit-scrollbar {
-  width: 0px;
+  width: 10px;
 }
 
-/* Selection */
-::selection {
-  background: linear-gradient(135deg, #00d4ff, #a855f7);
-  color: #000000;
+::-webkit-scrollbar-thumb {
+  background: rgba(107, 114, 128, 0.35);
+  border-radius: 999px;
 }
 
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(107, 114, 128, 0.55);
+}
+
+/* Tailwind Utilities */
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
-
   .border-precision {
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border);
   }
 
-  .bg-gradient-colorful {
-    background: linear-gradient(135deg, rgba(0, 212, 255, 0.1), rgba(168, 85, 247, 0.1), rgba(236, 72, 153, 0.1));
+  .bg-surface {
+    background: var(--surface);
+  }
+
+  .bg-surface-2 {
+    background: var(--surface-2);
   }
 }

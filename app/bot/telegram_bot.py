@@ -1,112 +1,477 @@
 import os
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
+import asyncio
+from typing import Dict
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+)
 from dotenv import load_dotenv
 
 from app.utils.validators import detect_platform
 from app.services.transcript_service import get_transcript_from_url
 from app.services.formatter_service import TranscriptFormatter
 from app.services.file_service import FileGenerator
+from app.services.rate_limit_service import check_rate_limit
+from app.services.metadata_service import MetadataService
+from app.core.errors import AppError, ErrorCode
+from app.core.config import settings
+from app.utils.logging_config import logger
+from app.services.analytics_service import AnalyticsService
+from app.services.telemetry_service import TelemetryService, hash_identifier, bucket_duration
 
+# ---------------------------------------------------------------------------
 # Load environment variables
+# ---------------------------------------------------------------------------
 load_dotenv()
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# ---------------------------------------------------------------------------
+# Per-user preferences (Phase 1 — in-memory)
+# ---------------------------------------------------------------------------
+_user_prefs: Dict[str, Dict] = {}
+
+
+def _get_prefs(user_id: str) -> dict:
+    """Return preferences for *user_id*, creating defaults if absent."""
+    if user_id not in _user_prefs:
+        _user_prefs[user_id] = {
+            "last_file_format": "txt",
+            "last_include_timestamps": False,
+        }
+    return _user_prefs[user_id]
+
+
+def _set_pref(user_id: str, **kwargs) -> None:
+    prefs = _get_prefs(user_id)
+    prefs.update(kwargs)
+
+
+def _emit_event(event_name: str, user_id: str, props: dict | None = None) -> None:
+    """Fire-and-forget telemetry for Telegram actions."""
+    try:
+        TelemetryService.log_event(
+            event_name=event_name,
+            session_id=hash_identifier(user_id),
+            app_source="telegram",
+            props=props,
+        )
+    except Exception:
+        pass  # never break bot flow for telemetry
+
+
+# ---------------------------------------------------------------------------
+# Error-code → clean Telegram message mapping (no emojis)
+# ---------------------------------------------------------------------------
+ERROR_MESSAGES: Dict[ErrorCode, str] = {
+    ErrorCode.INVALID_URL: "Invalid URL.\nOnly YouTube and Vimeo links are supported.",
+    ErrorCode.TRANSCRIPT_NOT_AVAILABLE: "Transcript not available for this video.",
+    ErrorCode.VIDEO_TOO_LONG: "Video exceeds maximum supported duration.",
+    ErrorCode.RATE_LIMIT_EXCEEDED: "Rate limit exceeded.\nTry again later.",
+    ErrorCode.UPSTREAM_TIMEOUT: "Transcript provider did not respond in time.",
+    ErrorCode.INTERNAL_ERROR: "Something went wrong.\nTry again.",
+}
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _ts_label(include: bool) -> str:
+    return "On" if include else "Off"
+
+
+def _duration_label(seconds: int) -> str:
+    m, s = divmod(seconds, 60)
+    return f"{m}m {s}s"
+
+
+def _reading_time_label(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    m, s = divmod(seconds, 60)
+    return f"{m}m {s}s"
+
+
+def _format_type_for_prefs(include_timestamps: bool) -> str:
+    """Map the boolean timestamp flag to the formatter's format_type arg."""
+    return "timestamp" if include_timestamps else "clean"
+
+
+def _ready_keyboard(include_timestamps: bool) -> InlineKeyboardMarkup:
+    """Build the inline keyboard shown on the 'Ready' state."""
+    ts_text = f"Timestamps: {_ts_label(include_timestamps)}"
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Download TXT", callback_data="dl|txt"),
+                InlineKeyboardButton("Download PDF", callback_data="dl|pdf"),
+                InlineKeyboardButton("Download DOCX", callback_data="dl|docx"),
+            ],
+            [
+                InlineKeyboardButton("Preview", callback_data="preview"),
+                InlineKeyboardButton(ts_text, callback_data="ts_toggle"),
+            ],
+            [
+                InlineKeyboardButton("New link", callback_data="new_link"),
+            ],
+        ]
+    )
+
+
+def _ready_text(title: str, duration_s: int, word_count: int, reading_time_s: int) -> str:
+    return (
+        f"Transcript ready.\n\n"
+        f"Title: {title}\n"
+        f"Duration: {_duration_label(duration_s)}\n"
+        f"Words: {word_count}\n"
+        f"Read time: {_reading_time_label(reading_time_s)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Command handlers
+# ---------------------------------------------------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome to TranscriptFlow!\n\n"
-        "Send me a YouTube video URL, and I'll extract the transcript for you.\n"
-        "I support TXT, DOCX, and PDF formats."
+        "Transcript Flow\n\n"
+        "Send a YouTube or Vimeo link to get started."
     )
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Simply paste a YouTube link to get started.\n"
-        "Example: https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        "Transcript Flow\n\n"
+        "Send a YouTube or Vimeo link to get started."
     )
 
+
+# ---------------------------------------------------------------------------
+# URL handler — instant processing via single edited message
+# ---------------------------------------------------------------------------
+
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text
+    url = update.message.text.strip()
+    user_id = str(update.effective_user.id)
+
+    # Rate limit ---------------------------------------------------------
+    if not check_rate_limit(f"tg_{user_id}"):
+        _emit_event("tg_rate_limited", user_id)
+        await update.message.reply_text(ERROR_MESSAGES[ErrorCode.RATE_LIMIT_EXCEEDED])
+        return
+
+    # Detect platform ----------------------------------------------------
     try:
-        # Detect platform
         platform = detect_platform(url)
-        context.user_data['url'] = url
-        context.user_data['platform'] = platform
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("Clean Text (.txt)", callback_data='clean|txt'),
-                InlineKeyboardButton("With Timestamps (.txt)", callback_data='timestamp|txt'),
-            ],
-            [
-                InlineKeyboardButton("Paragraph Mode (.docx)", callback_data='paragraph|docx'),
-                InlineKeyboardButton("Clean PDF (.pdf)", callback_data='clean|pdf'),
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        platform_name = platform.capitalize()
-        await update.message.reply_text(
-            f"✅ {platform_name} video detected! Choose a format:", 
-            reply_markup=reply_markup
+    except ValueError:
+        await update.message.reply_text(ERROR_MESSAGES[ErrorCode.INVALID_URL])
+        return
+
+    _emit_event("tg_link_received", user_id, {"provider": platform})
+
+    prefs = _get_prefs(user_id)
+    file_ext = prefs["last_file_format"]
+    include_ts = prefs["last_include_timestamps"]
+    fmt_type = _format_type_for_prefs(include_ts)
+
+    # State A — Extracting -----------------------------------------------
+    status_msg = await update.message.reply_text(
+        f"Transcript Flow\n\n"
+        f"Extracting transcript\u2026\n"
+        f"Provider: {platform}\n"
+        f"Format: {file_ext}\n"
+        f"Timestamps: {_ts_label(include_ts)}"
+    )
+
+    try:
+        # Extract (with timeout) -----------------------------------------
+        transcript_data = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, get_transcript_from_url, url),
+            timeout=settings.transcript_timeout_seconds,
         )
-        
-    except ValueError as e:
-        await update.message.reply_text(
-            "❌ That doesn't look like a valid YouTube or Vimeo URL. Please try again."
+
+        # State B — Formatting -------------------------------------------
+        await status_msg.edit_text("Transcript Flow\n\nFormatting transcript\u2026")
+
+        formatted_text = TranscriptFormatter.format(
+            transcript_data["segments"], format_type=fmt_type
         )
+        metrics = MetadataService.calculate_metrics(formatted_text)
+
+        # State C — Preparing file ----------------------------------------
+        await status_msg.edit_text("Transcript Flow\n\nPreparing file\u2026")
+
+        video_id = transcript_data.get("video_id", "unknown")
+        file_path = FileGenerator.generate_file(formatted_text, file_ext)
+
+        # State D — Ready ------------------------------------------------
+        ready = _ready_text(
+            title=transcript_data.get("title", "Untitled"),
+            duration_s=transcript_data.get("duration_seconds", 0),
+            word_count=metrics["word_count"],
+            reading_time_s=metrics["reading_time_seconds"],
+        )
+        await status_msg.edit_text(ready, reply_markup=_ready_keyboard(include_ts))
+
+        # Cache everything for callback re-use ----------------------------
+        context.user_data["transcript_data"] = transcript_data
+        context.user_data["formatted_text"] = formatted_text
+        context.user_data["file_path"] = file_path
+        context.user_data["file_ext"] = file_ext
+        context.user_data["video_id"] = video_id
+        context.user_data["status_msg_id"] = status_msg.message_id
+        context.user_data["metrics"] = metrics
+        context.user_data["url"] = url
+        context.user_data["platform"] = platform
+        context.user_data["_processing"] = False
+
+        # Log success event
+        _emit_event("tg_extract_succeeded", user_id, {
+            "provider": platform,
+            "duration_seconds_bucket": bucket_duration(transcript_data.get("duration_seconds", 0)),
+            "file_format": file_ext,
+        })
+        AnalyticsService.record_event(
+            success=True, source="telegram", fmt=file_ext, provider=platform,
+            duration_seconds=transcript_data.get("duration_seconds", 0),
+            processing_time_ms=int((asyncio.get_event_loop().time()) * 1000),
+        )
+
+    except asyncio.TimeoutError:
+        _emit_event("tg_extract_failed", user_id, {"error_code": "UPSTREAM_TIMEOUT", "provider": platform})
+        AnalyticsService.record_event(
+            success=False, source="telegram", fmt=file_ext, provider=platform,
+            error_code="UPSTREAM_TIMEOUT",
+        )
+        await status_msg.edit_text(ERROR_MESSAGES[ErrorCode.UPSTREAM_TIMEOUT])
+    except AppError as e:
+        msg = ERROR_MESSAGES.get(e.code, f"{e.message}")
+        await status_msg.edit_text(msg)
     except Exception as e:
-        logging.error(f"Error handling URL: {e}")
-        await update.message.reply_text("Something went wrong processing that URL.")
+        logger.error(f"Error processing URL: {e}")
+        _emit_event("tg_extract_failed", user_id, {"error_code": "INTERNAL_ERROR", "provider": platform})
+        AnalyticsService.record_event(
+            success=False, source="telegram", fmt=file_ext, provider=platform,
+            error_code="INTERNAL_ERROR",
+        )
+        await status_msg.edit_text(ERROR_MESSAGES[ErrorCode.INTERNAL_ERROR])
+
+
+# ---------------------------------------------------------------------------
+# Callback query router
+# ---------------------------------------------------------------------------
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-    
     data = query.data
-    format_type, file_extension = data.split('|')
-    
-    url = context.user_data.get('url')
-    platform = context.user_data.get('platform', 'video')
-    
-    if not url:
-        await query.edit_message_text(text="Session expired. Please send the link again.")
+
+    if data.startswith("dl|"):
+        await _handle_download(query, context, data.split("|")[1])
+    elif data == "preview":
+        await _handle_preview(query, context)
+    elif data == "ts_toggle":
+        await _handle_timestamp_toggle(query, context)
+    elif data == "new_link":
+        await _handle_new_link(query, context)
+    elif data.startswith("preview_dl|"):
+        await _handle_preview_download(query, context, data.split("|")[1])
+    elif data == "preview_back":
+        await _handle_preview_back(query, context)
+    else:
+        await query.answer()
+
+
+# ---------------------------------------------------------------------------
+# Download callback
+# ---------------------------------------------------------------------------
+
+async def _handle_download(query, context: ContextTypes.DEFAULT_TYPE, ext: str):
+    # Anti-spam: guard against concurrent processing ----------------------
+    if context.user_data.get("_processing"):
+        await query.answer("Processing\u2026")
+        return
+    context.user_data["_processing"] = True
+    await query.answer("Processing\u2026")
+
+    try:
+        formatted_text = context.user_data.get("formatted_text")
+        video_id = context.user_data.get("video_id", "unknown")
+        user_id = str(query.from_user.id)
+
+        _emit_event("tg_download_clicked", user_id, {"file_format": ext})
+
+        if not formatted_text:
+            await query.answer("Session expired. Send the link again.")
+            context.user_data["_processing"] = False
+            return
+
+        # Re-use cached file if extension matches, otherwise regenerate ---
+        cached_ext = context.user_data.get("file_ext")
+        if ext == cached_ext and context.user_data.get("file_path"):
+            file_path = context.user_data["file_path"]
+        else:
+            file_path = FileGenerator.generate_file(formatted_text, ext)
+
+        # Send file -------------------------------------------------------
+        with open(file_path, "rb") as f:
+            await context.bot.send_document(
+                chat_id=query.message.chat_id,
+                document=f,
+                filename=f"transcriptflow_{video_id}.{ext}",
+            )
+
+        # Update preference ------------------------------------------------
+        _set_pref(user_id, last_file_format=ext)
+
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        await query.answer("Something went wrong.")
+    finally:
+        context.user_data["_processing"] = False
+
+
+# ---------------------------------------------------------------------------
+# Preview callback
+# ---------------------------------------------------------------------------
+
+async def _handle_preview(query, context: ContextTypes.DEFAULT_TYPE):
+    await query.answer()
+
+    formatted_text = context.user_data.get("formatted_text")
+    if not formatted_text:
+        await query.answer("Session expired. Send the link again.")
         return
 
-    await query.edit_message_text(
-        text=f"⏳ Generating {format_type} transcript as .{file_extension}..."
+    _emit_event("tg_preview_clicked", str(query.from_user.id))
+
+    limit = settings.preview_chars
+    truncated = len(formatted_text) > limit
+    preview = formatted_text[:limit]
+
+    text = f"Preview (truncated)\n\n{preview}"
+    if truncated:
+        text += "\n\nShowing shortened preview. Download file for full transcript."
+
+    user_id = str(query.from_user.id)
+    prefs = _get_prefs(user_id)
+    current_fmt = prefs["last_file_format"]
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(f"Download {current_fmt.upper()}", callback_data=f"preview_dl|{current_fmt}")],
+            [InlineKeyboardButton("Back", callback_data="preview_back")],
+        ]
     )
-    
+
+    preview_msg = await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=text,
+        reply_markup=keyboard,
+    )
+    context.user_data["preview_msg_id"] = preview_msg.message_id
+
+
+# ---------------------------------------------------------------------------
+# Preview-specific download
+# ---------------------------------------------------------------------------
+
+async def _handle_preview_download(query, context: ContextTypes.DEFAULT_TYPE, ext: str):
+    await _handle_download(query, context, ext)
+
+
+# ---------------------------------------------------------------------------
+# Preview back — delete preview message
+# ---------------------------------------------------------------------------
+
+async def _handle_preview_back(query, context: ContextTypes.DEFAULT_TYPE):
+    await query.answer()
     try:
-        # Extract transcript using unified function
-        raw_transcript = get_transcript_from_url(url)
-        
-        # Format
-        formatted_text = TranscriptFormatter.format(raw_transcript, format_type=format_type)
-        
-        # Generate File
-        file_stream = FileGenerator.generate_file(formatted_text, file_extension)
-        
-        # Send File
-        file_stream.name = f"transcript_{platform}.{file_extension}"
-        await context.bot.send_document(
-            chat_id=update.effective_chat.id,
-            document=file_stream,
-            filename=f"transcript_{platform}.{file_extension}",
-            caption=f"✅ Here is your {platform.capitalize()} transcript!\nFormat: {format_type}"
-        )
-        
+        preview_id = context.user_data.get("preview_msg_id")
+        if preview_id:
+            await context.bot.delete_message(
+                chat_id=query.message.chat_id,
+                message_id=preview_id,
+            )
+            context.user_data.pop("preview_msg_id", None)
     except Exception as e:
-        logging.error(f"Error generating transcript: {e}")
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"❌ Failed to generate transcript: {str(e)}"
+        logger.error(f"Could not delete preview message: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Timestamp toggle callback
+# ---------------------------------------------------------------------------
+
+async def _handle_timestamp_toggle(query, context: ContextTypes.DEFAULT_TYPE):
+    await query.answer()
+
+    user_id = str(query.from_user.id)
+    prefs = _get_prefs(user_id)
+    new_ts = not prefs["last_include_timestamps"]
+    _set_pref(user_id, last_include_timestamps=new_ts)
+
+    transcript_data = context.user_data.get("transcript_data")
+    if not transcript_data:
+        await query.answer("Session expired. Send the link again.")
+        return
+
+    # Re-format with new timestamp state ----------------------------------
+    fmt_type = _format_type_for_prefs(new_ts)
+    formatted_text = TranscriptFormatter.format(
+        transcript_data["segments"], format_type=fmt_type
+    )
+    metrics = MetadataService.calculate_metrics(formatted_text)
+
+    # Regenerate file in current preferred format -------------------------
+    file_ext = prefs["last_file_format"]
+    file_path = FileGenerator.generate_file(formatted_text, file_ext)
+
+    # Update cache --------------------------------------------------------
+    context.user_data["formatted_text"] = formatted_text
+    context.user_data["file_path"] = file_path
+    context.user_data["file_ext"] = file_ext
+    context.user_data["metrics"] = metrics
+
+    # Edit the main status message ----------------------------------------
+    ready = _ready_text(
+        title=transcript_data.get("title", "Untitled"),
+        duration_s=transcript_data.get("duration_seconds", 0),
+        word_count=metrics["word_count"],
+        reading_time_s=metrics["reading_time_seconds"],
+    )
+    try:
+        await context.bot.edit_message_text(
+            chat_id=query.message.chat_id,
+            message_id=context.user_data.get("status_msg_id", query.message.message_id),
+            text=ready,
+            reply_markup=_ready_keyboard(new_ts),
         )
+    except Exception as e:
+        logger.error(f"Could not edit status message on ts toggle: {e}")
+
+
+# ---------------------------------------------------------------------------
+# New link callback
+# ---------------------------------------------------------------------------
+
+async def _handle_new_link(query, context: ContextTypes.DEFAULT_TYPE):
+    await query.answer()
+
+    # Clear extraction cache but keep user preferences --------------------
+    for key in ("transcript_data", "formatted_text", "file_path",
+                "file_ext", "video_id", "status_msg_id", "metrics",
+                "url", "platform", "preview_msg_id"):
+        context.user_data.pop(key, None)
+
+    await query.edit_message_text("Transcript Flow\n\nSend a YouTube or Vimeo link.")
+
+
+# ---------------------------------------------------------------------------
+# Bot entry point
+# ---------------------------------------------------------------------------
 
 def run_bot():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -124,5 +489,6 @@ def run_bot():
     print("Bot is polling...")
     application.run_polling()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     run_bot()
