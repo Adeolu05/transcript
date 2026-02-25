@@ -1,5 +1,6 @@
 import os
 import asyncio
+import pathlib
 from typing import Dict
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -34,6 +35,11 @@ load_dotenv()
 # Per-user preferences (Phase 1 — in-memory)
 # ---------------------------------------------------------------------------
 _user_prefs: Dict[str, Dict] = {}
+
+# ---------------------------------------------------------------------------
+# Avatar path (bundled inside app/ for Docker availability)
+# ---------------------------------------------------------------------------
+_AVATAR_PATH = pathlib.Path(__file__).parent / "assets" / "telegram-avatar-1024.png"
 
 
 def _get_prefs(user_id: str) -> dict:
@@ -75,6 +81,37 @@ ERROR_MESSAGES: Dict[ErrorCode, str] = {
     ErrorCode.UPSTREAM_TIMEOUT: "Transcript provider did not respond in time.",
     ErrorCode.INTERNAL_ERROR: "Something went wrong.\nTry again.",
 }
+
+# ---------------------------------------------------------------------------
+# MarkdownV2 helper
+# ---------------------------------------------------------------------------
+
+def _escape_md2(text: str) -> str:
+    """Escape special characters for Telegram MarkdownV2."""
+    for ch in r"\_*[]()~`>#+-=|{}.!":
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Onboarding text constants (pre-escaped MarkdownV2)
+# ---------------------------------------------------------------------------
+
+HELP_TEXT = (
+    "*How to use Transcript Flow*\n\n"
+    "1\\. Send a YouTube or Vimeo link\\.\n"
+    "2\\. The bot extracts the transcript automatically\\.\n"
+    "3\\. Download as TXT, PDF, or DOCX\\.\n\n"
+    "Use the Timestamps button to toggle timestamps "
+    "on or off\\. Your preference is remembered\\."
+)
+
+PRIVACY_TEXT = (
+    "*Privacy*\n\n"
+    "\\• No account required\\.\n"
+    "\\• Generated files are auto\\-deleted after 1 hour\\.\n"
+    "\\• No persistent storage of transcripts or user data\\."
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -137,17 +174,43 @@ def _ready_text(title: str, duration_s: int, word_count: int, reading_time_s: in
 # ---------------------------------------------------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Transcript Flow\n\n"
-        "Send a YouTube or Vimeo link to get started."
+    user_id = str(update.effective_user.id)
+    _emit_event("tg_start", user_id)
+
+    caption = (
+        "*Transcript Flow*\n\n"
+        "Extract transcripts from YouTube and Vimeo links\\.\n\n"
+        "Send a video link and receive a clean text file "
+        "in seconds\\.\n\n"
+        "\\• TXT \\(default\\)\n"
+        "\\• PDF\n"
+        "\\• DOCX\n"
+        "\\• Optional timestamps\n"
+        "\\• No account required\n\n"
+        "_Files expire after 1 hour\\._\n\n"
+        "Send a link to begin\\."
     )
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Open Web App", url="https://usetranscriptflow.com")],
+        [
+            InlineKeyboardButton("Help", callback_data="onboard_help"),
+            InlineKeyboardButton("Privacy", callback_data="onboard_privacy"),
+        ],
+    ])
+
+    with open(_AVATAR_PATH, "rb") as photo:
+        await update.message.reply_photo(
+            photo=photo,
+            caption=caption,
+            parse_mode="MarkdownV2",
+            reply_markup=keyboard,
+        )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Transcript Flow\n\n"
-        "Send a YouTube or Vimeo link to get started."
-    )
+    _emit_event("tg_help", str(update.effective_user.id))
+    await update.message.reply_text(HELP_TEXT, parse_mode="MarkdownV2")
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +332,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
 
-    if data.startswith("dl|"):
+    # Onboarding callbacks ------------------------------------------------
+    if data == "onboard_help":
+        await query.answer()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=HELP_TEXT,
+            parse_mode="MarkdownV2",
+        )
+    elif data == "onboard_privacy":
+        await query.answer()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=PRIVACY_TEXT,
+            parse_mode="MarkdownV2",
+        )
+    # Extraction callbacks ------------------------------------------------
+    elif data.startswith("dl|"):
         await _handle_download(query, context, data.split("|")[1])
     elif data == "preview":
         await _handle_preview(query, context)
