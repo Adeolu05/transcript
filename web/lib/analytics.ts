@@ -3,8 +3,9 @@
  * No PII, no raw URLs. Session ID stored in localStorage.
  */
 
+import { PUBLIC_API_BASE } from './publicApiBase';
+
 const SESSION_KEY = 'tf_session_id';
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
 
 function uuid(): string {
     return crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -40,9 +41,9 @@ export function trackEvent(
         // navigator.sendBeacon is faster & survives page unloads
         if (navigator.sendBeacon) {
             const blob = new Blob([body], { type: 'application/json' });
-            navigator.sendBeacon(`${API_BASE}/api/v1/events`, blob);
+            navigator.sendBeacon(`${PUBLIC_API_BASE}/api/v1/events`, blob);
         } else {
-            fetch(`${API_BASE}/api/v1/events`, {
+            fetch(`${PUBLIC_API_BASE}/api/v1/events`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body,

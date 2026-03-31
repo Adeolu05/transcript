@@ -74,6 +74,8 @@ async def extract_transcript(request: ExtractRequest, background_tasks: Backgrou
     except ValueError:
         raise AppError(ErrorCode.INVALID_URL, "The provided URL is not a supported YouTube or Vimeo link.", 400)
 
+    layout_format = 'timestamp' if request.include_timestamps else 'clean'
+
     # 1. Fetch transcript with timeout protection
     try:
         transcript_data = await asyncio.wait_for(
@@ -85,10 +87,10 @@ async def extract_transcript(request: ExtractRequest, background_tasks: Backgrou
         MetadataService.log_failure(
             url=request.url, platform=platform, error_code="UPSTREAM_TIMEOUT",
             error_message="Transcript provider did not respond in time.",
-            processing_time_ms=processing_time_ms, format_requested=request.format,
+            processing_time_ms=processing_time_ms, format_requested=layout_format,
         )
         AnalyticsService.record_event(
-            success=False, source="web", fmt=request.format, provider=platform,
+            success=False, source="web", fmt='txt', provider=platform,
             processing_time_ms=processing_time_ms, error_code="UPSTREAM_TIMEOUT",
         )
         raise AppError(ErrorCode.UPSTREAM_TIMEOUT, "Transcript provider did not respond in time.", 504)
@@ -96,21 +98,24 @@ async def extract_transcript(request: ExtractRequest, background_tasks: Backgrou
         err_msg = str(e)
         processing_time_ms = int((time.time() - start_time) * 1000)
         # Map known error messages to stable codes
-        if "disabled" in err_msg.lower():
+        el = err_msg.lower()
+        if "disabled" in el:
             code = ErrorCode.TRANSCRIPT_NOT_AVAILABLE
-        elif "unavailable" in err_msg.lower() or "not found" in err_msg.lower():
+        elif "unavailable" in el or "not found" in el or "no transcript or captions" in el:
             code = ErrorCode.TRANSCRIPT_NOT_AVAILABLE
-        elif "unsupported" in err_msg.lower():
+        elif "youtube blocked" in el or "only available in english" in el:
+            code = ErrorCode.TRANSCRIPT_NOT_AVAILABLE
+        elif "unsupported" in el:
             code = ErrorCode.INVALID_URL
         else:
             code = ErrorCode.INTERNAL_ERROR
         MetadataService.log_failure(
             url=request.url, platform=platform, error_code=code.value,
             error_message=err_msg, processing_time_ms=processing_time_ms,
-            format_requested=request.format,
+            format_requested=layout_format,
         )
         AnalyticsService.record_event(
-            success=False, source="web", fmt=request.format, provider=platform,
+            success=False, source="web", fmt='txt', provider=platform,
             processing_time_ms=processing_time_ms, error_code=code.value,
         )
         status = 400 if code != ErrorCode.INTERNAL_ERROR else 500
@@ -125,7 +130,7 @@ async def extract_transcript(request: ExtractRequest, background_tasks: Backgrou
             duration_seconds=duration, processing_time_ms=processing_time_ms,
         )
         AnalyticsService.record_event(
-            success=False, source="web", fmt=request.format, provider=platform,
+            success=False, source="web", fmt='txt', provider=platform,
             duration_seconds=duration, processing_time_ms=processing_time_ms,
             error_code="VIDEO_TOO_LONG",
         )
@@ -136,9 +141,8 @@ async def extract_transcript(request: ExtractRequest, background_tasks: Backgrou
         )
 
     # 3. Format
-    format_type = 'timestamp' if request.include_timestamps else 'clean'
     formatted_text = await asyncio.to_thread(
-        TranscriptFormatter.format, transcript_data['segments'], format_type
+        TranscriptFormatter.format, transcript_data['segments'], layout_format
     )
 
     # 4. Generate TXT file (base format for preview + convert)
@@ -162,7 +166,7 @@ async def extract_transcript(request: ExtractRequest, background_tasks: Backgrou
         duration_seconds=duration,
         processing_time_ms=processing_time_ms,
         word_count=metrics['word_count'],
-        format_requested=format_type,
+        format_requested=layout_format,
         file_type='txt',
     )
     AnalyticsService.record_event(

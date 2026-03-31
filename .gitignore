@@ -25,3 +25,13 @@ yarn-error.log*
 *.sqlite
 *.sqlite3
 implementation_plan.md.resolved
+data/transcript_cache/
+data/metrics.db
+data/metrics.db-shm
+data/metrics.db-wal
+
+# Local / internal docs (not shipped in repo)
+version_info.txt
+technical_audit.md
+PRD.md
+DEPLOY_BACKEND.md

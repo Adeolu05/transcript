@@ -10,3 +10,4 @@ python-multipart
 python-dotenv
 webvtt-py
 requests
+httpx

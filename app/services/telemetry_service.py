@@ -33,6 +33,14 @@ ALLOWED_EVENTS = {
     "tg_preview_clicked",
     "tg_download_clicked",
     "tg_rate_limited",
+    # Telegram command usage
+    "tg_cmd_start",
+    "tg_cmd_help",
+    "tg_cmd_extract",
+    "tg_cmd_formats",
+    "tg_cmd_privacy",
+    "tg_cmd_status",
+    "tg_sample_clicked",
 }
 
 # Props keys we accept (everything else is stripped)

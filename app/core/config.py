@@ -1,6 +1,11 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+    )
     app_name: str = "TranscriptFlow API"
     version: str = "1.0.0"
     debug: bool = False
@@ -36,7 +41,26 @@ class Settings(BaseSettings):
     sentry_dsn: str = ""
     sentry_traces_sample_rate: float = 0.1
 
-    class Config:
-        env_file = ".env"
+    # Optional comma-separated codes to try *before* the built-in list in transcript_service
+    youtube_transcript_language_priority: str = ""
+
+    # YouTube transcript API — optional proxies (cloud IPs are often blocked; see library README)
+    webshare_proxy_username: str = ""
+    webshare_proxy_password: str = ""
+    # Optional comma-separated ISO country codes for Webshare IP pool, e.g. "de,us"
+    webshare_proxy_locations: str = ""
+    youtube_http_proxy_url: str = ""
+    youtube_https_proxy_url: str = ""
+
+    # Transcript cache (disk) — repeat requests skip YouTube/Vimeo when fresh
+    transcript_cache_enabled: bool = True
+    transcript_cache_ttl_hours: int = 72
+    # Empty = project data/transcript_cache/
+    transcript_cache_dir: str = ""
+
+    # YouTube: extra attempts on IpBlocked/RequestBlocked (useful with rotating residential proxy)
+    youtube_transcript_retry_max: int = 3
+    youtube_transcript_retry_backoff_seconds: float = 0.65
+
 
 settings = Settings()

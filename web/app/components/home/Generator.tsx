@@ -3,6 +3,7 @@
 import React, { useState, useRef } from 'react';
 import { CheckCircle2, AlertCircle, Copy, Download, Youtube, Video, ChevronRight } from 'lucide-react';
 import { ProcessingStatus, TranscriptResult, FileFormat } from '../../types';
+import { PUBLIC_API_BASE } from '../../../lib/publicApiBase';
 
 export const Generator: React.FC = () => {
     const [url, setUrl] = useState('');
@@ -21,42 +22,61 @@ export const Generator: React.FC = () => {
         setDownloadUrl('');
         setStatus(ProcessingStatus.ANALYZING);
 
+        const apiBase = PUBLIC_API_BASE;
+
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
             setStatus(ProcessingStatus.EXTRACTING);
 
-            const response = await fetch(`${apiUrl}/api/v1/extract`, {
+            const extractRes = await fetch(`${apiBase}/api/v1/extract`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     url,
-                    format: format,
                     include_timestamps: false,
                 }),
             });
 
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'extraction failed');
+            const data = await extractRes.json();
+
+            if (!extractRes.ok || !data.success) {
+                const msg = data?.error?.message ?? data?.detail ?? 'extraction failed';
+                throw new Error(typeof msg === 'string' ? msg : 'extraction failed');
             }
 
             setStatus(ProcessingStatus.FORMATTING);
 
-            const data = await response.json();
+            let downloadPath = data.file_download_url as string;
 
-            setDownloadUrl(`${apiUrl}${data.file_download_url}`);
+            if (format !== 'txt') {
+                const convertRes = await fetch(`${apiBase}/api/v1/convert`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        file_id: data.file_id,
+                        format,
+                    }),
+                });
+                const conv = await convertRes.json();
+                if (!convertRes.ok || !conv.success) {
+                    const msg = conv?.error?.message ?? conv?.detail ?? 'conversion failed';
+                    throw new Error(typeof msg === 'string' ? msg : 'conversion failed');
+                }
+                downloadPath = conv.file_download_url;
+            }
+
+            setDownloadUrl(`${apiBase}${downloadPath}`);
 
             setResult({
                 videoId: extractVideoId(url),
-                title: data.video_title || 'video transcript',
-                segments: [], // Raw text isn't returned in the JSON for V1 anymore
+                title: data.title || 'video transcript',
+                segments: [],
                 summary: `processed ${data.word_count} words. archival artifact generated.`,
             });
 
             setStatus(ProcessingStatus.COMPLETE);
             setTimeout(() => resultRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
-        } catch (err: any) {
-            setError(err.message || "unexpected engine error.");
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : 'unexpected engine error.');
             setStatus(ProcessingStatus.ERROR);
         }
     };

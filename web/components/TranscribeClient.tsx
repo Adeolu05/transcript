@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { trackEvent } from '../lib/analytics';
+import { PUBLIC_API_BASE } from '../lib/publicApiBase';
 
 type UIState = 'idle' | 'processing' | 'success' | 'error';
 
@@ -53,7 +54,7 @@ export function TranscribeClient() {
     const [fileTtlHours, setFileTtlHours] = useState<number>(1);
     const resultRef = useRef<HTMLDivElement>(null);
 
-    const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+    const API_BASE = PUBLIC_API_BASE;
 
     useEffect(() => {
         if ((state === 'success' || state === 'error') && resultRef.current) {
@@ -227,6 +228,10 @@ export function TranscribeClient() {
                         </div>
                     </div>
                 </div>
+
+                <p className="text-xs font-medium -mt-4 mb-8" style={{ color: 'var(--muted)' }}>
+                    YouTube transcripts are English-only for now.
+                </p>
 
                 {/* Generate / Extracting button */}
                 <button

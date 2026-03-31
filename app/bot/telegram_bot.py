@@ -1,9 +1,11 @@
 import os
+import re
 import asyncio
 import pathlib
 from typing import Dict
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import Conflict
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -15,7 +17,10 @@ from telegram.ext import (
 from dotenv import load_dotenv
 
 from app.utils.validators import detect_platform
-from app.services.transcript_service import get_transcript_from_url
+from app.services.transcript_service import (
+    get_transcript_from_url,
+    YOUTUBE_TRANSCRIPT_UNAVAILABLE_EN_ONLY,
+)
 from app.services.formatter_service import TranscriptFormatter
 from app.services.file_service import FileGenerator
 from app.services.rate_limit_service import check_rate_limit
@@ -30,6 +35,19 @@ from app.services.telemetry_service import TelemetryService, hash_identifier, bu
 # Load environment variables
 # ---------------------------------------------------------------------------
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+SAMPLE_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+_URL_PATTERN = re.compile(
+    r"https?://(?:www\.)?"
+    r"(?:youtube\.com/watch\?[^\s]*v=[^\s]+|youtu\.be/[^\s]+|"
+    r"youtube\.com/shorts/[^\s]+|"
+    r"(?:www\.)?vimeo\.com/\d+|player\.vimeo\.com/video/\d+)",
+    re.IGNORECASE,
+)
 
 # ---------------------------------------------------------------------------
 # Per-user preferences (Phase 1 — in-memory)
@@ -71,11 +89,13 @@ def _emit_event(event_name: str, user_id: str, props: dict | None = None) -> Non
 
 
 # ---------------------------------------------------------------------------
-# Error-code → clean Telegram message mapping (no emojis)
+# Error-code → clean Telegram message mapping
 # ---------------------------------------------------------------------------
 ERROR_MESSAGES: Dict[ErrorCode, str] = {
     ErrorCode.INVALID_URL: "Invalid URL.\nOnly YouTube and Vimeo links are supported.",
-    ErrorCode.TRANSCRIPT_NOT_AVAILABLE: "Transcript not available for this video.",
+    ErrorCode.TRANSCRIPT_NOT_AVAILABLE: (
+        "No usable captions for this video (or none we could load). Try another link."
+    ),
     ErrorCode.VIDEO_TOO_LONG: "Video exceeds maximum supported duration.",
     ErrorCode.RATE_LIMIT_EXCEEDED: "Rate limit exceeded.\nTry again later.",
     ErrorCode.UPSTREAM_TIMEOUT: "Transcript provider did not respond in time.",
@@ -97,20 +117,49 @@ def _escape_md2(text: str) -> str:
 # Onboarding text constants (pre-escaped MarkdownV2)
 # ---------------------------------------------------------------------------
 
+WELCOME_TEXT = (
+    "*Transcript Flow*\n\n"
+    "Turn YouTube or Vimeo videos into clean transcripts\\.\n\n"
+    "\\• YouTube: English captions only at this time\n"
+    "\\• TXT \\(default\\)\n"
+    "\\• PDF / DOCX\n"
+    "\\• Optional timestamps\n"
+    "\\• No account required\n"
+    "\\• Files auto\\-delete after 1 hour\n\n"
+    "Send a video link to begin\\.\n"
+    "Or try this sample:\n"
+    "`/extract https://www\\.youtube\\.com/watch?v\\=dQw4w9WgXcQ`"
+)
+
 HELP_TEXT = (
     "*How to use Transcript Flow*\n\n"
     "1\\. Send a YouTube or Vimeo link\\.\n"
-    "2\\. The bot extracts the transcript automatically\\.\n"
+    "2\\. Preview the transcript\\.\n"
     "3\\. Download as TXT, PDF, or DOCX\\.\n\n"
-    "Use the Timestamps button to toggle timestamps "
-    "on or off\\. Your preference is remembered\\."
+    "Power users:\n"
+    "`/extract <link>`\n\n"
+    "If extraction fails:\n"
+    "\\• YouTube transcripts are English\\-only for now\\.\n"
+    "\\• Captions may be missing or unavailable for some videos\\.\n"
+    "\\• Transcripts may be disabled for the video\\."
+)
+
+FORMATS_TEXT = (
+    "*Available formats*\n\n"
+    "TXT  \\– Clean plain text\n"
+    "PDF  \\– Printable document\n"
+    "DOCX \\– Editable Word file\n\n"
+    "Optional:\n"
+    "\\• Include timestamps\n\n"
+    "Default format is TXT\\."
 )
 
 PRIVACY_TEXT = (
     "*Privacy*\n\n"
     "\\• No account required\\.\n"
-    "\\• Generated files are auto\\-deleted after 1 hour\\.\n"
-    "\\• No persistent storage of transcripts or user data\\."
+    "\\• Files auto\\-delete after 1 hour\\.\n"
+    "\\• No long\\-term storage\\.\n"
+    "\\• We don't store raw transcript content beyond the expiry window\\."
 )
 
 # ---------------------------------------------------------------------------
@@ -169,69 +218,58 @@ def _ready_text(title: str, duration_s: int, word_count: int, reading_time_s: in
     )
 
 
-# ---------------------------------------------------------------------------
-# Command handlers
-# ---------------------------------------------------------------------------
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    _emit_event("tg_start", user_id)
-
-    caption = (
-        "*Transcript Flow*\n\n"
-        "Extract transcripts from YouTube and Vimeo links\\.\n\n"
-        "Send a video link and receive a clean text file "
-        "in seconds\\.\n\n"
-        "\\• TXT \\(default\\)\n"
-        "\\• PDF\n"
-        "\\• DOCX\n"
-        "\\• Optional timestamps\n"
-        "\\• No account required\n\n"
-        "_Files expire after 1 hour\\._\n\n"
-        "Send a link to begin\\."
-    )
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Open Web App", url="https://usetranscriptflow.com")],
+def _start_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for the /start welcome message."""
+    return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("Help", callback_data="onboard_help"),
-            InlineKeyboardButton("Privacy", callback_data="onboard_privacy"),
+            InlineKeyboardButton("Try Sample", callback_data="sample"),
+            InlineKeyboardButton("Formats", callback_data="formats"),
+        ],
+        [
+            InlineKeyboardButton("Privacy", callback_data="privacy"),
+            InlineKeyboardButton("Help", callback_data="help"),
         ],
     ])
 
-    with open(_AVATAR_PATH, "rb") as photo:
-        await update.message.reply_photo(
-            photo=photo,
-            caption=caption,
-            parse_mode="MarkdownV2",
-            reply_markup=keyboard,
-        )
 
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    _emit_event("tg_help", str(update.effective_user.id))
-    await update.message.reply_text(HELP_TEXT, parse_mode="MarkdownV2")
+def _extract_url_from_text(text: str) -> str | None:
+    """Return the first YouTube/Vimeo URL found in *text*, or None."""
+    match = _URL_PATTERN.search(text)
+    return match.group(0) if match else None
 
 
 # ---------------------------------------------------------------------------
-# URL handler — instant processing via single edited message
+# Core extraction pipeline (reused by /extract, plain-text, and sample button)
 # ---------------------------------------------------------------------------
 
-async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
+async def _process_url(
+    url: str,
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    chat_id: int | None = None,
+) -> None:
+    """Run the full extraction flow for *url* and post results to the chat."""
     user_id = str(update.effective_user.id)
+    target_chat = chat_id or update.effective_chat.id
 
     # Rate limit ---------------------------------------------------------
     if not check_rate_limit(f"tg_{user_id}"):
         _emit_event("tg_rate_limited", user_id)
-        await update.message.reply_text(ERROR_MESSAGES[ErrorCode.RATE_LIMIT_EXCEEDED])
+        await context.bot.send_message(
+            chat_id=target_chat,
+            text=ERROR_MESSAGES[ErrorCode.RATE_LIMIT_EXCEEDED],
+        )
         return
 
     # Detect platform ----------------------------------------------------
     try:
         platform = detect_platform(url)
     except ValueError:
-        await update.message.reply_text(ERROR_MESSAGES[ErrorCode.INVALID_URL])
+        await context.bot.send_message(
+            chat_id=target_chat,
+            text=ERROR_MESSAGES[ErrorCode.INVALID_URL],
+        )
         return
 
     _emit_event("tg_link_received", user_id, {"provider": platform})
@@ -242,12 +280,15 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fmt_type = _format_type_for_prefs(include_ts)
 
     # State A — Extracting -----------------------------------------------
-    status_msg = await update.message.reply_text(
-        f"Transcript Flow\n\n"
-        f"Extracting transcript\u2026\n"
-        f"Provider: {platform}\n"
-        f"Format: {file_ext}\n"
-        f"Timestamps: {_ts_label(include_ts)}"
+    status_msg = await context.bot.send_message(
+        chat_id=target_chat,
+        text=(
+            f"Transcript Flow\n\n"
+            f"Extracting transcript\u2026\n"
+            f"Provider: {platform}\n"
+            f"Format: {file_ext}\n"
+            f"Timestamps: {_ts_label(include_ts)}"
+        ),
     )
 
     try:
@@ -273,10 +314,10 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # State D — Ready ------------------------------------------------
         ready = _ready_text(
-            title=transcript_data.get("title", "Untitled"),
-            duration_s=transcript_data.get("duration_seconds", 0),
-            word_count=metrics["word_count"],
-            reading_time_s=metrics["reading_time_seconds"],
+            transcript_data.get("title", "Untitled"),
+            transcript_data.get("duration_seconds", 0),
+            metrics["word_count"],
+            metrics["reading_time_seconds"],
         )
         await status_msg.edit_text(ready, reply_markup=_ready_keyboard(include_ts))
 
@@ -313,27 +354,177 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text(ERROR_MESSAGES[ErrorCode.UPSTREAM_TIMEOUT])
     except AppError as e:
         msg = ERROR_MESSAGES.get(e.code, f"{e.message}")
+        _emit_event("tg_extract_failed", user_id, {"error_code": e.code.value, "provider": platform})
         await status_msg.edit_text(msg)
     except Exception as e:
+        err_msg = str(e).lower()
         logger.error(f"Error processing URL: {e}")
-        _emit_event("tg_extract_failed", user_id, {"error_code": "INTERNAL_ERROR", "provider": platform})
+
+        # Map known transcript errors to the human-friendly message
+        if (
+            "disabled" in err_msg
+            or "not found" in err_msg
+            or "unavailable" in err_msg
+            or "no transcript or captions" in err_msg
+        ):
+            friendly = ERROR_MESSAGES[ErrorCode.TRANSCRIPT_NOT_AVAILABLE]
+            error_code = "TRANSCRIPT_NOT_AVAILABLE"
+        elif "youtube blocked" in err_msg or "only available in english" in err_msg:
+            friendly = YOUTUBE_TRANSCRIPT_UNAVAILABLE_EN_ONLY
+            error_code = "TRANSCRIPT_NOT_AVAILABLE"
+        else:
+            friendly = ERROR_MESSAGES[ErrorCode.INTERNAL_ERROR]
+            error_code = "INTERNAL_ERROR"
+
+        _emit_event("tg_extract_failed", user_id, {"error_code": error_code, "provider": platform})
         AnalyticsService.record_event(
             success=False, source="telegram", fmt=file_ext, provider=platform,
-            error_code="INTERNAL_ERROR",
+            error_code=error_code,
         )
-        await status_msg.edit_text(ERROR_MESSAGES[ErrorCode.INTERNAL_ERROR])
+        await status_msg.edit_text(friendly)
+
+
+# ---------------------------------------------------------------------------
+# Command handlers
+# ---------------------------------------------------------------------------
+
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = str(update.effective_user.id)
+    _emit_event("tg_cmd_start", user_id)
+
+    if _AVATAR_PATH.exists():
+        with open(_AVATAR_PATH, "rb") as photo:
+            await update.message.reply_photo(
+                photo=photo,
+                caption=WELCOME_TEXT,
+                parse_mode="MarkdownV2",
+                reply_markup=_start_keyboard(),
+            )
+    else:
+        await update.message.reply_text(
+            WELCOME_TEXT,
+            parse_mode="MarkdownV2",
+            reply_markup=_start_keyboard(),
+        )
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _emit_event("tg_cmd_help", str(update.effective_user.id))
+    await update.message.reply_text(HELP_TEXT, parse_mode="MarkdownV2")
+
+
+async def extract_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = str(update.effective_user.id)
+    _emit_event("tg_cmd_extract", user_id)
+
+    # Parse argument(s) after /extract
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage: /extract <link>\n\n"
+            "Example:\n/extract https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        )
+        return
+
+    url = " ".join(args).strip()
+
+    # Validate URL
+    try:
+        detect_platform(url)
+    except ValueError:
+        await update.message.reply_text(
+            "Invalid link. Only YouTube and Vimeo URLs are supported.\n\n"
+            "Example:\n/extract https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        )
+        return
+
+    await _process_url(url, update, context)
+
+
+async def formats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _emit_event("tg_cmd_formats", str(update.effective_user.id))
+    await update.message.reply_text(FORMATS_TEXT, parse_mode="MarkdownV2")
+
+
+async def privacy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _emit_event("tg_cmd_privacy", str(update.effective_user.id))
+    await update.message.reply_text(PRIVACY_TEXT, parse_mode="MarkdownV2")
+
+
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _emit_event("tg_cmd_status", str(update.effective_user.id))
+
+    # Quick health check — verify core services are importable
+    api_status = "Online"
+    try:
+        # Attempt a lightweight import check of critical services
+        from app.services.transcript_service import get_transcript_from_url as _check  # noqa: F401
+        from app.services.file_service import FileGenerator as _check2  # noqa: F401
+    except Exception:
+        api_status = "Degraded"
+
+    await update.message.reply_text(
+        "Service Status\n\n"
+        f"API: {api_status}\n"
+        "Rate limit: Active\n"
+        "File expiry: 1 hour"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plain-text message handler (raw links or hint)
+# ---------------------------------------------------------------------------
+
+async def handle_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = update.message.text.strip()
+    url = _extract_url_from_text(text)
+
+    if url:
+        await _process_url(url, update, context)
+    else:
+        await update.message.reply_text("Send a YouTube/Vimeo link or use /help")
 
 
 # ---------------------------------------------------------------------------
 # Callback query router
 # ---------------------------------------------------------------------------
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     data = query.data
 
-    # Onboarding callbacks ------------------------------------------------
-    if data == "onboard_help":
+    # Onboarding inline-button callbacks ----------------------------------
+    if data == "sample":
+        await query.answer("Extracting sample\u2026")
+        _emit_event("tg_sample_clicked", str(query.from_user.id))
+        await _process_url(SAMPLE_URL, update, context, chat_id=query.message.chat_id)
+
+    elif data == "help":
+        await query.answer()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=HELP_TEXT,
+            parse_mode="MarkdownV2",
+        )
+
+    elif data == "formats":
+        await query.answer()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=FORMATS_TEXT,
+            parse_mode="MarkdownV2",
+        )
+
+    elif data == "privacy":
+        await query.answer()
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=PRIVACY_TEXT,
+            parse_mode="MarkdownV2",
+        )
+
+    # Legacy onboarding callbacks (backward compat) -----------------------
+    elif data == "onboard_help":
         await query.answer()
         await context.bot.send_message(
             chat_id=query.message.chat_id,
@@ -347,6 +538,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=PRIVACY_TEXT,
             parse_mode="MarkdownV2",
         )
+
     # Extraction callbacks ------------------------------------------------
     elif data.startswith("dl|"):
         await _handle_download(query, context, data.split("|")[1])
@@ -368,7 +560,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Download callback
 # ---------------------------------------------------------------------------
 
-async def _handle_download(query, context: ContextTypes.DEFAULT_TYPE, ext: str):
+async def _handle_download(query, context: ContextTypes.DEFAULT_TYPE, ext: str) -> None:
     # Anti-spam: guard against concurrent processing ----------------------
     if context.user_data.get("_processing"):
         await query.answer("Processing\u2026")
@@ -417,7 +609,7 @@ async def _handle_download(query, context: ContextTypes.DEFAULT_TYPE, ext: str):
 # Preview callback
 # ---------------------------------------------------------------------------
 
-async def _handle_preview(query, context: ContextTypes.DEFAULT_TYPE):
+async def _handle_preview(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer()
 
     formatted_text = context.user_data.get("formatted_text")
@@ -458,7 +650,7 @@ async def _handle_preview(query, context: ContextTypes.DEFAULT_TYPE):
 # Preview-specific download
 # ---------------------------------------------------------------------------
 
-async def _handle_preview_download(query, context: ContextTypes.DEFAULT_TYPE, ext: str):
+async def _handle_preview_download(query, context: ContextTypes.DEFAULT_TYPE, ext: str) -> None:
     await _handle_download(query, context, ext)
 
 
@@ -466,7 +658,7 @@ async def _handle_preview_download(query, context: ContextTypes.DEFAULT_TYPE, ex
 # Preview back — delete preview message
 # ---------------------------------------------------------------------------
 
-async def _handle_preview_back(query, context: ContextTypes.DEFAULT_TYPE):
+async def _handle_preview_back(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer()
     try:
         preview_id = context.user_data.get("preview_msg_id")
@@ -484,7 +676,7 @@ async def _handle_preview_back(query, context: ContextTypes.DEFAULT_TYPE):
 # Timestamp toggle callback
 # ---------------------------------------------------------------------------
 
-async def _handle_timestamp_toggle(query, context: ContextTypes.DEFAULT_TYPE):
+async def _handle_timestamp_toggle(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer()
 
     user_id = str(query.from_user.id)
@@ -516,10 +708,10 @@ async def _handle_timestamp_toggle(query, context: ContextTypes.DEFAULT_TYPE):
 
     # Edit the main status message ----------------------------------------
     ready = _ready_text(
-        title=transcript_data.get("title", "Untitled"),
-        duration_s=transcript_data.get("duration_seconds", 0),
-        word_count=metrics["word_count"],
-        reading_time_s=metrics["reading_time_seconds"],
+        transcript_data.get("title", "Untitled"),
+        transcript_data.get("duration_seconds", 0),
+        metrics["word_count"],
+        metrics["reading_time_seconds"],
     )
     try:
         await context.bot.edit_message_text(
@@ -536,7 +728,7 @@ async def _handle_timestamp_toggle(query, context: ContextTypes.DEFAULT_TYPE):
 # New link callback
 # ---------------------------------------------------------------------------
 
-async def _handle_new_link(query, context: ContextTypes.DEFAULT_TYPE):
+async def _handle_new_link(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer()
 
     # Clear extraction cache but keep user preferences --------------------
@@ -549,10 +741,27 @@ async def _handle_new_link(query, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
+# Global error handler (avoids silent "No error handlers" spam)
+# ---------------------------------------------------------------------------
+
+async def _telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    err = context.error
+    if isinstance(err, Conflict):
+        logger.error(
+            "Telegram Conflict: only one process may poll this bot. "
+            "Stop every other instance using the same TELEGRAM_BOT_TOKEN "
+            "(other terminals, Cursor background jobs, Render worker, etc.), "
+            "then start the bot again. If you used webhooks before, run /deleteWebhook in @BotFather or call deleteWebhook."
+        )
+        return
+    logger.exception("Unhandled error in Telegram handler", exc_info=err)
+
+
+# ---------------------------------------------------------------------------
 # Bot entry point
 # ---------------------------------------------------------------------------
 
-def run_bot():
+def run_bot() -> None:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token or token == "your_token_here":
         print("Error: TELEGRAM_BOT_TOKEN not found in .env")
@@ -560,10 +769,21 @@ def run_bot():
 
     application = ApplicationBuilder().token(token).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_url))
+    # Command handlers
+    application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("extract", extract_cmd))
+    application.add_handler(CommandHandler("formats", formats_cmd))
+    application.add_handler(CommandHandler("privacy", privacy_cmd))
+    application.add_handler(CommandHandler("status", status_cmd))
+
+    # Plain-text message handler (catches raw links)
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_plain_text))
+
+    # Inline button callback handler
     application.add_handler(CallbackQueryHandler(button_callback))
+
+    application.add_error_handler(_telegram_error_handler)
 
     print("Bot is polling...")
     application.run_polling()
