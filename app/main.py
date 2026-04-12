@@ -41,6 +41,26 @@ def _init_sentry() -> None:
 
 _init_sentry()
 
+
+def _cors_allow_origins() -> list[str]:
+    origins: list[str] = []
+    for raw in (settings.frontend_url, *settings.cors_extra_origins.split(",")):
+        o = raw.strip()
+        if o and o not in origins:
+            origins.append(o)
+    return origins
+
+
+def _log_startup_security_hints() -> None:
+    if settings.debug:
+        return
+    if settings.metrics_password == "changeme":
+        logger.warning(
+            "METRICS_PASSWORD is still the default 'changeme'. "
+            "Set a strong METRICS_USERNAME / METRICS_PASSWORD before public deployment."
+        )
+
+
 # Cleanup is handled by a dedicated Render cron job (python -m app.cleanup),
 # NOT by an in-process asyncio loop. This avoids duplicate cleanup across
 # Gunicorn workers and keeps web processes focused on serving requests.
@@ -49,6 +69,7 @@ _init_sentry()
 async def lifespan(app: FastAPI):
     # Startup actions
     logger.info("Starting up TranscriptFlow API...")
+    _log_startup_security_hints()
     yield
     # Shutdown actions
     logger.info("Shutting down API...")
@@ -75,7 +96,7 @@ async def fallback_error_handler(request: Request, exc: Exception):
 # ── CORS ──────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url],
+    allow_origins=_cors_allow_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

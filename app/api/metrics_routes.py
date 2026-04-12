@@ -3,6 +3,7 @@ Protected internal metrics dashboard.
 Basic Auth via METRICS_USERNAME / METRICS_PASSWORD from .env.
 """
 
+import html
 import secrets
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
@@ -64,7 +65,9 @@ def _dist_rows(dist: dict) -> str:
     if not dist:
         return '<tr><td colspan="2" style="color:#888">No data</td></tr>'
     return "".join(
-        f"<tr><td>{k or '(none)'}</td><td>{v}</td></tr>" for k, v in dist.items()
+        "<tr><td>"
+        f"{html.escape(str(k or '(none)'))}</td><td>{html.escape(str(v))}</td></tr>"
+        for k, v in dist.items()
     )
 
 

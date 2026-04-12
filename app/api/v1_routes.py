@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.services.transcript_service import get_transcript_from_url
 from app.services.formatter_service import TranscriptFormatter
@@ -53,7 +53,7 @@ def _validate_file_id(file_id: str) -> str:
 
 
 class ExtractRequest(BaseModel):
-    url: str
+    url: str = Field(..., min_length=20, max_length=2048)
     include_timestamps: bool = False
 
 
@@ -119,7 +119,13 @@ async def extract_transcript(request: ExtractRequest, background_tasks: Backgrou
             processing_time_ms=processing_time_ms, error_code=code.value,
         )
         status = 400 if code != ErrorCode.INTERNAL_ERROR else 500
-        raise AppError(code, err_msg, status)
+        # Never return raw exception text for INTERNAL_ERROR (info leak / stack hints).
+        client_msg = (
+            "An unexpected error occurred."
+            if code == ErrorCode.INTERNAL_ERROR
+            else err_msg
+        )
+        raise AppError(code, client_msg, status)
 
     # 2. Duration guardrail
     duration = transcript_data.get('duration_seconds', 0)
@@ -197,7 +203,7 @@ async def extract_transcript(request: ExtractRequest, background_tasks: Backgrou
 
 
 # ── Download ──────────────────────────────────────────────────────────
-@router.get("/download/{file_id}")
+@router.get("/download/{file_id}", dependencies=[Depends(verify_rate_limit)])
 async def download_file(file_id: str):
     # Strict validation: UUID stem + allowed extension, blocks traversal & .raw
     _validate_file_id(file_id)

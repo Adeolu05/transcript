@@ -3,6 +3,7 @@
 import React from 'react';
 import { TranscribeClient } from '../../components/TranscribeClient';
 import { Navbar } from '../../components/Navbar';
+import { SiteFooter } from '../../components/SiteFooter';
 
 export default function AppPage() {
     return (
@@ -88,22 +89,7 @@ export default function AppPage() {
                 </div>
             </section>
 
-            {/* Footer */}
-            <footer className="md:px-12 px-6 py-8" style={{ borderTop: '1px solid var(--border)' }}>
-                <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-start md:items-center gap-8">
-                    <span className="text-xs font-semibold uppercase tracking-[0.4em]" style={{ color: 'var(--muted)' }}>
-                        © 2026 Transcript Flow
-                    </span>
-                    <div className="flex gap-6">
-                        <a href="https://github.com/dpeluola" target="_blank" className="transition-colors duration-300 text-[10px] tracking-widest uppercase font-medium hover:opacity-70" style={{ color: 'var(--muted)' }}>
-                            github
-                        </a>
-                        <a href="https://t.me/TranscriptFlowBot" target="_blank" className="transition-colors duration-300 text-[10px] tracking-widest uppercase font-medium hover:opacity-70" style={{ color: 'var(--muted)' }}>
-                            telegram
-                        </a>
-                    </div>
-                </div>
-            </footer>
+            <SiteFooter />
         </div>
     );
 }

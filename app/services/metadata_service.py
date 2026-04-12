@@ -1,5 +1,7 @@
 import json
 from typing import Dict, Any, Optional
+from urllib.parse import urlparse
+
 from app.utils.logging_config import logger
 
 
@@ -43,6 +45,17 @@ class MetadataService:
         logger.info(json.dumps(log_data))
 
     @staticmethod
+    def _url_for_log(url: str, max_len: int = 160) -> str:
+        """Host + path only (no query/fragment) to avoid logging tokens or full PII."""
+        if not url:
+            return ""
+        p = urlparse(url)
+        base = f"{p.scheme}://{p.netloc}{p.path}".strip()
+        if len(base) > max_len:
+            return base[: max_len - 1] + "…"
+        return base
+
+    @staticmethod
     def log_failure(
         url: str,
         platform: str,
@@ -54,7 +67,7 @@ class MetadataService:
         """Logs a failed extraction workflow as structured JSON."""
         log_data = {
             "event": "transcript_failure",
-            "url": url,
+            "url": MetadataService._url_for_log(url),
             "provider": platform,
             "error_code": error_code,
             "error_message": error_message,

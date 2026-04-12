@@ -2,27 +2,26 @@
 
 import React, { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Github, LayoutGrid } from 'lucide-react';
 import { BotDemo } from './components/home/BotDemo';
 import { HowItFlows } from './components/home/HowItFlows';
 import { Capabilities } from './components/home/Capabilities';
 import { Navbar } from '../components/Navbar';
 import { JsonLd } from '../components/JsonLd';
-
-const TELEGRAM_BOT_URL = 'https://t.me/TranscriptFlowBot';
+import { SiteFooter } from '../components/SiteFooter';
+import { SITE_URL, TELEGRAM_BOT_URL } from '../lib/site';
 
 const WEBSITE_SCHEMA = {
   "@context": "https://schema.org",
   "@type": "WebSite",
   name: "Transcript Flow",
-  url: "https://usetranscriptflow.com",
+  url: SITE_URL,
 };
 
 const APP_SCHEMA = {
   "@context": "https://schema.org",
   "@type": "WebApplication",
   name: "Transcript Flow",
-  url: "https://usetranscriptflow.com/app",
+  url: `${SITE_URL}/app`,
   operatingSystem: "Web",
   applicationCategory: "UtilitiesApplication",
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
@@ -146,7 +145,7 @@ export default function Home() {
               </div>
               <div className="flex flex-col justify-between h-full">
                 <p className="md:text-xl leading-relaxed text-lg font-light tracking-tight max-w-xl mb-4" style={{ color: 'var(--muted)' }}>
-                  A stateless extraction pipeline. Processing occurs in-memory.
+                  A simple extraction pipeline: fetch captions, format text, offer a download. No account on the web app; generated files are short-lived.
                 </p>
 
                 <div className="grid grid-cols-3 gap-12 mt-12 pt-10" style={{ borderTop: '1px solid var(--border)' }}>
@@ -190,34 +189,22 @@ export default function Home() {
                     Extract.<br />Download.<br />Done.
                   </h4>
                   <div className="flex flex-wrap items-center gap-6">
-                    <a href="/app" className="inline-flex items-center gap-4 px-10 py-5 text-white font-bold text-[10px] uppercase tracking-widest transition-all rounded-full active:scale-[0.97]" style={{ background: 'var(--primary)' }}>
+                    <Link href="/app" className="inline-flex items-center gap-4 px-10 py-5 text-white font-bold text-[10px] uppercase tracking-widest transition-all rounded-full active:scale-[0.97]" style={{ background: 'var(--primary)' }}>
                       Open App
-                    </a>
-                    <a href="https://t.me/TranscriptFlowBot" target="_blank" className="inline-flex items-center gap-4 md:text-lg transition-opacity hover:opacity-70 group text-base font-semibold pb-2"
+                    </Link>
+                    <a href={TELEGRAM_BOT_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-4 md:text-lg transition-opacity hover:opacity-70 group text-base font-semibold pb-2"
                       style={{ color: 'var(--muted)', borderBottom: '2px solid var(--border)' }}>
                       Open Telegram Bot
                     </a>
                   </div>
-                </div>
-
-                <div className="flex flex-col items-start md:items-end gap-10 w-full md:w-auto">
-                  <div className="flex gap-6">
-                    <a href="https://github.com/dpeluola" target="_blank" className="transition-opacity hover:opacity-70" style={{ color: 'var(--muted)' }}>
-                      <Github className="h-6 w-6" />
-                    </a>
-                    <a href="#" className="transition-opacity hover:opacity-70" style={{ color: 'var(--muted)' }}>
-                      <LayoutGrid className="h-6 w-6" />
-                    </a>
-                  </div>
-                  <span className="text-xs font-semibold uppercase tracking-[0.4em]" style={{ color: 'var(--muted)' }}>
-                    © 2026 Transcript Flow
-                  </span>
                 </div>
               </div>
             </div>
           </footer>
         </div>
       </section>
+
+      <SiteFooter />
     </div>
   );
 }

@@ -11,8 +11,8 @@ client = TestClient(app)
 
 _TRANSCRIPT = {
     "provider": "youtube",
-    "source_url": "https://www.youtube.com/watch?v=testvideo",
-    "video_id": "testvideo",
+    "source_url": "https://www.youtube.com/watch?v=testvideo12",
+    "video_id": "testvideo12",
     "title": "Unit Test Video",
     "language": "en",
     "duration_seconds": 120,
@@ -30,7 +30,7 @@ class TestV1Extract(unittest.TestCase):
         r = client.post(
             "/api/v1/extract",
             json={
-                "url": "https://www.youtube.com/watch?v=testvideo",
+                "url": "https://www.youtube.com/watch?v=testvideo12",
                 "include_timestamps": False,
             },
         )
@@ -38,7 +38,7 @@ class TestV1Extract(unittest.TestCase):
         data = r.json()
         self.assertTrue(data["success"])
         self.assertEqual(data["title"], "Unit Test Video")
-        self.assertEqual(data["video_id"], "testvideo")
+        self.assertEqual(data["video_id"], "testvideo12")
         self.assertIn("file_id", data)
         self.assertTrue(data["file_id"].endswith(".txt"))
         self.assertTrue(data["file_download_url"].startswith("/api/v1/download/"))
@@ -62,7 +62,7 @@ class TestV1Extract(unittest.TestCase):
         r = client.post(
             "/api/v1/extract",
             json={
-                "url": "https://www.youtube.com/watch?v=testvideo",
+                "url": "https://www.youtube.com/watch?v=testvideo12",
                 "include_timestamps": False,
             },
         )
@@ -70,6 +70,23 @@ class TestV1Extract(unittest.TestCase):
         body = r.json()
         self.assertFalse(body["success"])
         self.assertEqual(body["error"]["code"], "TRANSCRIPT_NOT_AVAILABLE")
+
+    @patch("app.api.v1_routes.get_transcript_from_url")
+    def test_extract_internal_error_hides_exception_detail(self, mock_fetch):
+        mock_fetch.side_effect = RuntimeError("DB password=secret and internal stack …")
+        r = client.post(
+            "/api/v1/extract",
+            json={
+                "url": "https://www.youtube.com/watch?v=testvideo12",
+                "include_timestamps": False,
+            },
+        )
+        self.assertEqual(r.status_code, 500)
+        body = r.json()
+        self.assertFalse(body["success"])
+        self.assertEqual(body["error"]["code"], "INTERNAL_ERROR")
+        self.assertNotIn("password", body["error"]["message"])
+        self.assertEqual(body["error"]["message"], "An unexpected error occurred.")
 
 
 class TestV1Convert(unittest.TestCase):
@@ -79,7 +96,7 @@ class TestV1Convert(unittest.TestCase):
         ex = client.post(
             "/api/v1/extract",
             json={
-                "url": "https://www.youtube.com/watch?v=testvideo",
+                "url": "https://www.youtube.com/watch?v=testvideo12",
                 "include_timestamps": False,
             },
         )

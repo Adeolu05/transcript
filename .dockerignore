@@ -1,9 +1,14 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 .env
+.env.*
+!.env.example
 .git/
+.cursor/
 web/
+node_modules/
 data/
 tests/
 *.md

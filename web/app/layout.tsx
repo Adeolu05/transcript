@@ -2,6 +2,10 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
+import { SITE_URL } from "../lib/site";
+
+const OG_IMAGE_URL = new URL("/opengraph-image", SITE_URL).toString();
+const TWITTER_IMAGE_URL = new URL("/twitter-image", SITE_URL).toString();
 
 const inter = Inter({
   subsets: ["latin"],
@@ -9,7 +13,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://usetranscriptflow.com"),
+  metadataBase: new URL(SITE_URL),
   title: {
     default: "Transcript Flow – YouTube & Vimeo Transcript Downloader",
     template: "%s – Transcript Flow",
@@ -28,15 +32,22 @@ export const metadata: Metadata = {
     title: "YouTube & Vimeo Transcript Downloader",
     description:
       "Extract and download YouTube and Vimeo transcripts. Preview before download. TXT, PDF, DOCX. No account required.",
-    url: "https://usetranscriptflow.com",
-    images: [{ url: "/opengraph-image.png", width: 1200, height: 630 }],
+    url: SITE_URL,
+    images: [
+      {
+        url: OG_IMAGE_URL,
+        width: 1200,
+        height: 630,
+        alt: "Transcript Flow - YouTube and Vimeo transcript downloader",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
     title: "YouTube & Vimeo Transcript Downloader",
     description:
       "Extract and download YouTube and Vimeo transcripts. Preview before download. TXT, PDF, DOCX.",
-    images: ["/opengraph-image.png"],
+    images: [TWITTER_IMAGE_URL],
   },
 };
 

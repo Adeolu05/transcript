@@ -13,21 +13,21 @@ class TestGetTranscriptFromUrl(unittest.TestCase):
     def test_youtube_delegates(self, mock_yt, _mock_read, _mock_write):
         mock_yt.return_value = {
             "provider": "youtube",
-            "source_url": "https://www.youtube.com/watch?v=abc123",
-            "video_id": "abc123",
+            "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "video_id": "dQw4w9WgXcQ",
             "title": "Test",
             "language": "en",
             "duration_seconds": 10,
             "segments": [{"text": "hi", "start": 0.0, "duration": 1.0}],
         }
-        url = "https://www.youtube.com/watch?v=abc123"
+        url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         result = get_transcript_from_url(url)
         mock_yt.assert_called_once()
         call_kw = mock_yt.call_args
-        self.assertEqual(call_kw[0][0], "abc123")
+        self.assertEqual(call_kw[0][0], "dQw4w9WgXcQ")
         self.assertEqual(call_kw[1].get("url"), url)
         self.assertEqual(result["provider"], "youtube")
-        self.assertEqual(result["video_id"], "abc123")
+        self.assertEqual(result["video_id"], "dQw4w9WgXcQ")
 
     @patch("app.services.transcript_service.write_transcript_cache")
     @patch("app.services.transcript_service.read_transcript_cache", return_value=None)
@@ -53,7 +53,7 @@ class TestGetTranscriptFromUrl(unittest.TestCase):
         cached = {
             "provider": "youtube",
             "source_url": "",
-            "video_id": "cachedid",
+            "video_id": "cachedid123",
             "title": "From cache",
             "language": "en",
             "duration_seconds": 9,
@@ -63,7 +63,7 @@ class TestGetTranscriptFromUrl(unittest.TestCase):
             "app.services.transcript_service.read_transcript_cache",
             return_value=dict(cached),
         ):
-            url = "https://www.youtube.com/watch?v=cachedid"
+            url = "https://www.youtube.com/watch?v=cachedid123"
             result = get_transcript_from_url(url)
         mock_yt.assert_not_called()
         self.assertEqual(result["title"], "From cache")

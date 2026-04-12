@@ -13,7 +13,7 @@ export function middleware(request: NextRequest) {
         host.endsWith('.vercel.app')
     ) {
         const url = request.nextUrl.clone();
-        url.host = 'usetranscriptflow.com';
+        url.host = 'www.usetranscriptflow.com';
         url.protocol = 'https:';
         url.port = '';
         return NextResponse.redirect(url, 308);

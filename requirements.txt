@@ -1,5 +1,6 @@
 fastapi
 uvicorn
+gunicorn
 pydantic-settings
 sentry-sdk[fastapi]
 youtube-transcript-api

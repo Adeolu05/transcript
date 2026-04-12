@@ -1,0 +1,86 @@
+# Transcript Flow — self-hosted API + optional Telegram bot (containers run as UID 1000, not root).
+#
+# Prerequisites: cp .env.example .env  then set secrets (TELEGRAM_BOT_TOKEN, METRICS_*, etc.).
+#
+# API only:
+#   docker compose up -d --build
+#
+# Worker count is set in the Dockerfile CMD (default 2). To override, add under `api:` e.g.:
+#   command: ["gunicorn","app.main:app","--worker-class","uvicorn.workers.UvicornWorker","--workers","1","--bind","0.0.0.0:8000","--timeout","120","--graceful-timeout","30","--access-logfile","-","--error-logfile","-","--max-requests","2000","--max-requests-jitter","200"]
+#
+# API + Telegram bot (requires TELEGRAM_BOT_TOKEN in .env):
+#   docker compose --profile bot up -d --build
+#
+# Logs: docker compose logs -f api
+#       docker compose logs -f telegram-bot
+#
+# Optional: schedule temp-file cleanup (same as Render cron), e.g. cron on the host:
+#   */15 * * * * docker compose -f /path/to/docker-compose.yml run --rm api python -m app.cleanup
+#
+# Requires Docker Compose v2 (supports `name:` and optional env_file).
+
+name: transcript-flow
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: transcriptflow-api:latest
+    container_name: transcriptflow-api
+    init: true
+    ports:
+      - "${API_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TEMP: /tmp
+      TMPDIR: /tmp
+    volumes:
+      - transcript_data:/app/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5).read()",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 50s
+
+  telegram-bot:
+    profiles: ["bot"]
+    image: transcriptflow-api:latest
+    container_name: transcriptflow-telegram-bot
+    init: true
+    command: ["python", "-m", "app.bot.telegram_bot"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TEMP: /tmp
+      TMPDIR: /tmp
+    volumes:
+      - transcript_data:/app/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  transcript_data:

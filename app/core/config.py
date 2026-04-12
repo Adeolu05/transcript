@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     debug: bool = False
     telegram_bot_token: str = "YOUR_TOKEN_HERE"
     frontend_url: str = "http://localhost:3000"
+    # Comma-separated extra browser origins allowed by CORS (same creds as FRONTEND_URL).
+    # Use for apex + www, or extra deploy URLs without changing the primary FRONTEND_URL.
+    cors_extra_origins: str = ""
 
     # Rate limiting
     rate_limit_requests: int = 10
