@@ -37,6 +37,10 @@ services:
     environment:
       TEMP: /tmp
       TMPDIR: /tmp
+      # Generated files + cache live under /app/data (shared volume with bot)
+      FILE_STORAGE_DIR: /app/data/tmp
+      TRANSCRIPT_CACHE_DIR: /app/data/transcript_cache
+      IN_PROCESS_CLEANUP_ENABLED: "true"
     volumes:
       - transcript_data:/app/data
     restart: unless-stopped
@@ -70,6 +74,8 @@ services:
     environment:
       TEMP: /tmp
       TMPDIR: /tmp
+      FILE_STORAGE_DIR: /app/data/tmp
+      TRANSCRIPT_CACHE_DIR: /app/data/transcript_cache
     volumes:
       - transcript_data:/app/data
     restart: unless-stopped

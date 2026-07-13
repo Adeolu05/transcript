@@ -11,8 +11,8 @@ Core Value: **Fast → Reliable → Structured → Downloadable.**
 - **Multi-Platform Support**: Extract transcripts from **YouTube** and **Vimeo** instantly.
 - **Clean Formats**: Download as **TXT, PDF, and DOCX**.
 - **Timestamps**: Toggle perfectly formatted timestamps on or off.
-- **Anonymous & Secure**: No accounts required. No persistent storage. Files auto-delete after 1 hour (TTL).
-- **Rate Limited & Guardrailed**: IP and User ID-based limits, along with max video duration and timeout protections.
+- **Anonymous & Secure**: No accounts required. Generated files auto-delete after ~1 hour (TTL). Optional short-term caption cache (hours) for reliability.
+- **Rate Limited & Guardrailed**: Separate extract vs convert quotas, max video duration (with caption-based fallback), segment/size caps, and timeout protections.
 - **Telemetry & Analytics**: Built-in lightweight JSON-structured logging and analytics tracking.
 
 ## 🏗 System Architecture
@@ -64,7 +64,7 @@ Both the Web App and Telegram Bot route through the identical core service modul
 ## 🛠 Tech Stack
 
 - **Backend**: Python 3.12, FastAPI, Uvicorn, Gunicorn
-- **Frontend**: Next.js 14, React, Tailwind CSS, Framer Motion
+- **Frontend**: Next.js 16, React 19, Tailwind CSS
 - **Transcripts**: `youtube-transcript-api`
 - **Generators**: `reportlab` (PDF), `python-docx` (Word)
 - **Deployment**: Docker, designed for Render/Railway scaling.

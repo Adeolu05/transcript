@@ -40,11 +40,18 @@ Values below match `app/core/config.py`. Names are the usual `UPPER_SNAKE` env n
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `RATE_LIMIT_REQUESTS` | `10` | Per-IP requests per window. |
+| `RATE_LIMIT_REQUESTS` | `10` | Per-IP **extract** requests per window. |
 | `RATE_LIMIT_WINDOW_SECONDS` | `86400` | Window (24h). |
-| `MAX_VIDEO_DURATION_SECONDS` | `10800` | Max video length (3h). |
+| `RATE_LIMIT_CONVERT_REQUESTS` | `40` | Per-IP convert (PDF/DOCX) quota. |
+| `RATE_LIMIT_EVENTS_REQUESTS` | `2000` | Per-IP telemetry quota (0 = unlimited). |
+| `RATE_LIMIT_DOWNLOAD_ENABLED` | `false` | When true, downloads use a separate bucket. |
+| `MAX_VIDEO_DURATION_SECONDS` | `10800` | Max video length (3h); estimated from captions if metadata missing. |
+| `MAX_TRANSCRIPT_SEGMENTS` | `20000` | Hard cap on caption cue count. |
 | `TRANSCRIPT_TIMEOUT_SECONDS` | `15` | Upstream transcript timeout. |
+| `FILE_STORAGE_DIR` | `/app/data/tmp` (Docker) | Generated file directory. |
 | `FILE_TTL_HOURS` | `1` | Temp files + cleanup age. |
+| `IN_PROCESS_CLEANUP_ENABLED` | `true` | API lifespan TTL cleaner (primary on PaaS). |
+| `CLEANUP_INTERVAL_SECONDS` | `900` | How often in-process cleanup runs. |
 | `CONVERT_MAX_CONCURRENCY` | `2` | Parallel PDF/DOCX conversions. |
 | `TRANSCRIPT_CACHE_ENABLED` | `true` | Disk cache for repeat URLs. |
 | `TRANSCRIPT_CACHE_TTL_HOURS` | `72` | Cache freshness. |

@@ -24,6 +24,12 @@ services:
         value: "10"
       - key: RATE_LIMIT_WINDOW_SECONDS
         value: "86400"
+      - key: RATE_LIMIT_CONVERT_REQUESTS
+        value: "40"
+      - key: RATE_LIMIT_EVENTS_REQUESTS
+        value: "2000"
+      - key: RATE_LIMIT_DOWNLOAD_ENABLED
+        value: "false"
       - key: TRUSTED_PROXY_COUNT
         value: "1"
       - key: MAX_VIDEO_DURATION_SECONDS
@@ -32,8 +38,17 @@ services:
         value: "15"
       - key: MAX_RAW_TEXT_LENGTH
         value: "500000"
+      - key: MAX_TRANSCRIPT_SEGMENTS
+        value: "20000"
+      # Under /app/data so a Render disk (if attached) can persist cache + temp files
+      - key: FILE_STORAGE_DIR
+        value: "/app/data/tmp"
       - key: FILE_TTL_HOURS
         value: "1"
+      - key: IN_PROCESS_CLEANUP_ENABLED
+        value: "true"
+      - key: CLEANUP_INTERVAL_SECONDS
+        value: "900"
       - key: PREVIEW_CHARS
         value: "1500"
       - key: SENTRY_DSN
@@ -47,7 +62,8 @@ services:
       - key: CONVERT_MAX_CONCURRENCY
         value: "2"
 
-  # Cleanup cron — runs exactly once every 15 minutes (no per-worker duplication)
+  # Optional cleanup cron — only effective if FILE_STORAGE_DIR is on a disk
+  # shared with the web service. Primary cleanup is in-process on the API.
   - type: cron
     name: transcriptflow-cleanup
     runtime: docker
@@ -59,3 +75,5 @@ services:
     envVars:
       - key: FILE_TTL_HOURS
         value: "1"
+      - key: FILE_STORAGE_DIR
+        value: "/app/data/tmp"

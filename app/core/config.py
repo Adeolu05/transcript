@@ -1,4 +1,10 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent
 
 
 class Settings(BaseSettings):
@@ -15,9 +21,16 @@ class Settings(BaseSettings):
     # Use for apex + www, or extra deploy URLs without changing the primary FRONTEND_URL.
     cors_extra_origins: str = ""
 
-    # Rate limiting
+    # Rate limiting — extract is the scarce resource; download/events use separate/no quota
     rate_limit_requests: int = 10
     rate_limit_window_seconds: int = 86400  # 24 hours
+    # PDF/DOCX conversion (separate bucket so one extract can convert multiple formats)
+    rate_limit_convert_requests: int = 40
+    # Product telemetry (high ceiling; 0 = unlimited)
+    rate_limit_events_requests: int = 2000
+    # When True, GET /download counts against a light shared bucket; default off
+    rate_limit_download_enabled: bool = False
+    rate_limit_download_requests: int = 200
 
     # Proxy security: how many trusted proxies sit in front of the app.
     # 0 = direct exposure (ignore X-Forwarded-For entirely, use socket IP).
@@ -28,10 +41,16 @@ class Settings(BaseSettings):
     max_video_duration_seconds: int = 10800  # 3 hours
     transcript_timeout_seconds: int = 15
     max_raw_text_length: int = 500_000  # ~500 KB, prevents huge PDF builds
-    convert_max_concurrency: int = 2    # max parallel PDF/DOCX conversions
+    max_transcript_segments: int = 20_000
+    convert_max_concurrency: int = 2  # max parallel PDF/DOCX conversions
 
-    # File TTL
+    # File storage + TTL
+    # Empty = <project>/data/tmp (Docker Compose mounts /app/data so cleanup & API share files)
+    file_storage_dir: str = ""
     file_ttl_hours: int = 1  # cleanup age + surfaced to frontend
+    # In-process cleanup (primary on multi-service PaaS where cron cannot see API /tmp)
+    in_process_cleanup_enabled: bool = True
+    cleanup_interval_seconds: int = 900  # 15 minutes
 
     # Telegram bot preview length
     preview_chars: int = 1500
@@ -64,6 +83,12 @@ class Settings(BaseSettings):
     # YouTube: extra attempts on IpBlocked/RequestBlocked (useful with rotating residential proxy)
     youtube_transcript_retry_max: int = 3
     youtube_transcript_retry_backoff_seconds: float = 0.65
+
+    def resolved_file_storage_dir(self) -> Path:
+        raw = (self.file_storage_dir or "").strip()
+        if raw:
+            return Path(raw)
+        return _project_root() / "data" / "tmp"
 
 
 settings = Settings()

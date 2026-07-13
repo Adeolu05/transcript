@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import asyncio
 import pathlib
 from typing import Dict
@@ -25,6 +26,7 @@ from app.services.formatter_service import TranscriptFormatter
 from app.services.file_service import FileGenerator
 from app.services.rate_limit_service import check_rate_limit
 from app.services.metadata_service import MetadataService
+from app.services.extract_guardrails import enforce_transcript_guardrails
 from app.core.errors import AppError, ErrorCode
 from app.core.config import settings
 from app.utils.logging_config import logger
@@ -125,7 +127,7 @@ WELCOME_TEXT = (
     "\\• PDF / DOCX\n"
     "\\• Optional timestamps\n"
     "\\• No account required\n"
-    "\\• Files auto\\-delete after 1 hour\n\n"
+    "\\• Download files expire after about 1 hour\n\n"
     "Send a video link to begin\\.\n"
     "Or try this sample:\n"
     "`/extract https://www\\.youtube\\.com/watch?v\\=dQw4w9WgXcQ`"
@@ -157,9 +159,10 @@ FORMATS_TEXT = (
 PRIVACY_TEXT = (
     "*Privacy*\n\n"
     "\\• No account required\\.\n"
-    "\\• Files auto\\-delete after 1 hour\\.\n"
-    "\\• No long\\-term storage\\.\n"
-    "\\• We don't store raw transcript content beyond the expiry window\\."
+    "\\• Generated files auto\\-delete after about 1 hour\\.\n"
+    "\\• Short\\-term caption cache \\(hours\\) may reduce repeat fetches\\.\n"
+    "\\• We do not keep permanent user accounts or history\\.\n"
+    "\\• See the website privacy page for full details\\."
 )
 
 # ---------------------------------------------------------------------------
@@ -253,8 +256,8 @@ async def _process_url(
     user_id = str(update.effective_user.id)
     target_chat = chat_id or update.effective_chat.id
 
-    # Rate limit ---------------------------------------------------------
-    if not check_rate_limit(f"tg_{user_id}"):
+    # Rate limit (extract bucket — same scarce quota as web extract)
+    if not check_rate_limit(f"tg_{user_id}", bucket="extract"):
         _emit_event("tg_rate_limited", user_id)
         await context.bot.send_message(
             chat_id=target_chat,
@@ -278,6 +281,7 @@ async def _process_url(
     file_ext = prefs["last_file_format"]
     include_ts = prefs["last_include_timestamps"]
     fmt_type = _format_type_for_prefs(include_ts)
+    started = time.time()
 
     # State A — Extracting -----------------------------------------------
     status_msg = await context.bot.send_message(
@@ -294,9 +298,12 @@ async def _process_url(
     try:
         # Extract (with timeout) -----------------------------------------
         transcript_data = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(None, get_transcript_from_url, url),
+            asyncio.to_thread(get_transcript_from_url, url),
             timeout=settings.transcript_timeout_seconds,
         )
+
+        # Same duration/size policy as HTTP API
+        duration = enforce_transcript_guardrails(transcript_data)
 
         # State B — Formatting -------------------------------------------
         await status_msg.edit_text("Transcript Flow\n\nFormatting transcript\u2026")
@@ -304,6 +311,7 @@ async def _process_url(
         formatted_text = TranscriptFormatter.format(
             transcript_data["segments"], format_type=fmt_type
         )
+        enforce_transcript_guardrails(transcript_data, formatted_text=formatted_text)
         metrics = MetadataService.calculate_metrics(formatted_text)
 
         # State C — Preparing file ----------------------------------------
@@ -315,7 +323,7 @@ async def _process_url(
         # State D — Ready ------------------------------------------------
         ready = _ready_text(
             transcript_data.get("title", "Untitled"),
-            transcript_data.get("duration_seconds", 0),
+            duration,
             metrics["word_count"],
             metrics["reading_time_seconds"],
         )
@@ -333,16 +341,16 @@ async def _process_url(
         context.user_data["platform"] = platform
         context.user_data["_processing"] = False
 
-        # Log success event
+        processing_time_ms = int((time.time() - started) * 1000)
         _emit_event("tg_extract_succeeded", user_id, {
             "provider": platform,
-            "duration_seconds_bucket": bucket_duration(transcript_data.get("duration_seconds", 0)),
+            "duration_seconds_bucket": bucket_duration(duration),
             "file_format": file_ext,
         })
         AnalyticsService.record_event(
             success=True, source="telegram", fmt=file_ext, provider=platform,
-            duration_seconds=transcript_data.get("duration_seconds", 0),
-            processing_time_ms=int((asyncio.get_event_loop().time()) * 1000),
+            duration_seconds=duration,
+            processing_time_ms=processing_time_ms,
         )
 
     except asyncio.TimeoutError:
@@ -350,17 +358,22 @@ async def _process_url(
         AnalyticsService.record_event(
             success=False, source="telegram", fmt=file_ext, provider=platform,
             error_code="UPSTREAM_TIMEOUT",
+            processing_time_ms=int((time.time() - started) * 1000),
         )
         await status_msg.edit_text(ERROR_MESSAGES[ErrorCode.UPSTREAM_TIMEOUT])
     except AppError as e:
-        msg = ERROR_MESSAGES.get(e.code, f"{e.message}")
+        msg = ERROR_MESSAGES.get(e.code, e.message)
         _emit_event("tg_extract_failed", user_id, {"error_code": e.code.value, "provider": platform})
+        AnalyticsService.record_event(
+            success=False, source="telegram", fmt=file_ext, provider=platform,
+            error_code=e.code.value,
+            processing_time_ms=int((time.time() - started) * 1000),
+        )
         await status_msg.edit_text(msg)
     except Exception as e:
         err_msg = str(e).lower()
-        logger.error(f"Error processing URL: {e}")
+        logger.error("Error processing URL: %s", e)
 
-        # Map known transcript errors to the human-friendly message
         if (
             "disabled" in err_msg
             or "not found" in err_msg
@@ -380,6 +393,7 @@ async def _process_url(
         AnalyticsService.record_event(
             success=False, source="telegram", fmt=file_ext, provider=platform,
             error_code=error_code,
+            processing_time_ms=int((time.time() - started) * 1000),
         )
         await status_msg.edit_text(friendly)
 

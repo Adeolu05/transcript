@@ -26,6 +26,7 @@ yarn-error.log*
 *.sqlite3
 implementation_plan.md.resolved
 data/transcript_cache/
+data/tmp/
 data/metrics.db
 data/metrics.db-shm
 data/metrics.db-wal

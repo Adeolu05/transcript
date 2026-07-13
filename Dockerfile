@@ -21,8 +21,8 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 COPY app/ app/
 
-# Writable app data (transcript cache, SQLite metrics under /app/data when used)
-RUN mkdir -p /app/data/transcript_cache \
+# Writable app data: transcript cache, metrics DB, generated files under data/tmp
+RUN mkdir -p /app/data/transcript_cache /app/data/tmp \
     && chown -R app:app /app
 
 # SECURITY: No .env baked into the image — inject at runtime (Compose, Render, Railway, etc.).
@@ -33,7 +33,10 @@ ENV HOME=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TEMP=/tmp \
-    TMPDIR=/tmp
+    TMPDIR=/tmp \
+    FILE_STORAGE_DIR=/app/data/tmp \
+    TRANSCRIPT_CACHE_DIR=/app/data/transcript_cache \
+    IN_PROCESS_CLEANUP_ENABLED=true
 
 EXPOSE 8000
 
