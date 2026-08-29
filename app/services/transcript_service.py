@@ -27,10 +27,10 @@ from app.services.transcript_cache_service import (
 )
 from app.core.config import settings
 
-# User-facing when YouTube blocks our IP (shown in API, bot, etc.).
+# User-facing when YouTube IpBlocked / RequestBlocked (cloud IPs are often banned).
 YOUTUBE_TRANSCRIPT_UNAVAILABLE_EN_ONLY = (
-    "Transcripts are only available in English at this time, and we could not load "
-    "captions for this video. Please try again later."
+    "We could not load captions because YouTube blocked this server. "
+    "Please try again later."
 )
 
 # Fallback search order after the client’s target language (never English-only).

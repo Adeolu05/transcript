@@ -56,9 +56,21 @@ Values below match `app/core/config.py`. Names are the usual `UPPER_SNAKE` env n
 | `TRANSCRIPT_CACHE_ENABLED` | `true` | Disk cache for repeat URLs. |
 | `TRANSCRIPT_CACHE_TTL_HOURS` | `72` | Cache freshness. |
 
-### Optional (YouTube IP blocks / proxies)
+### Required on cloud hosts (YouTube IP blocks)
 
-`WEBSHARE_PROXY_*`, `YOUTUBE_HTTP_PROXY_URL`, `YOUTUBE_HTTPS_PROXY_URL`, `YOUTUBE_TRANSCRIPT_LANGUAGE_PRIORITY` — see repo README / `youtube-transcript-api` docs.
+YouTube blocks most datacenter IPs. The Telegram bot and `/extract` then fail for **every** link, including English videos. The old user text talked about English-only captions. That was an IP block.
+
+Set a **residential** proxy on the API **and** the bot process (same env):
+
+| Variable | Purpose |
+|----------|---------|
+| `WEBSHARE_PROXY_USERNAME` | Webshare rotating residential user |
+| `WEBSHARE_PROXY_PASSWORD` | Webshare password |
+| `WEBSHARE_PROXY_LOCATIONS` | Optional country codes, e.g. `us,de` |
+
+Or generic HTTP(S) proxies: `YOUTUBE_HTTP_PROXY_URL`, `YOUTUBE_HTTPS_PROXY_URL`.
+
+Without one of these, cloud Telegram will keep failing. Local home IPs often work with no proxy.
 
 ---
 

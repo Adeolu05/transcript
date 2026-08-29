@@ -109,6 +109,19 @@ class TestTranscriptService(unittest.TestCase):
         self.assertEqual(mock_core.call_count, 3)
         self.assertEqual(mock_sleep.call_count, 2)
 
+    @patch("app.services.transcript_service.time.sleep")
+    @patch("app.services.transcript_service._youtube_ip_block_attempts", return_value=1)
+    @patch("app.services.transcript_service._youtube_transcript_fresh_core")
+    def test_youtube_ip_block_exhausted_says_server_blocked(
+        self, mock_core, _mock_attempts, _mock_sleep
+    ):
+        mock_core.side_effect = IpBlocked("vid")
+        with self.assertRaises(Exception) as ctx:
+            get_youtube_transcript("vid", url="")
+        msg = str(ctx.exception).lower()
+        self.assertIn("youtube blocked this server", msg)
+        self.assertNotIn("only available in english", msg)
+
 
 if __name__ == "__main__":
     unittest.main()
