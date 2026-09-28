@@ -90,9 +90,11 @@ async def extract_transcript(request: ExtractRequest):
 
     layout_format = "timestamp" if request.include_timestamps else "clean"
 
+    # The worker thread outlives wait_for; the deadline makes it stop calling upstream too
+    deadline = time.monotonic() + settings.transcript_timeout_seconds
     try:
         transcript_data = await asyncio.wait_for(
-            asyncio.to_thread(get_transcript_from_url, request.url),
+            asyncio.to_thread(get_transcript_from_url, request.url, deadline),
             timeout=settings.transcript_timeout_seconds,
         )
     except asyncio.TimeoutError:
@@ -124,9 +126,9 @@ async def extract_transcript(request: ExtractRequest):
         err_msg = str(e)
         processing_time_ms = int((time.time() - start_time) * 1000)
         if isinstance(e, TranscriptFetchError):
-            code = e.code
+            code, status = e.code, e.status_code
         else:
-            code = ErrorCode.INTERNAL_ERROR
+            code, status = ErrorCode.INTERNAL_ERROR, 500
             logger.exception("Unexpected transcript fetch failure")
         MetadataService.log_failure(
             url=request.url,
@@ -144,7 +146,6 @@ async def extract_transcript(request: ExtractRequest):
             processing_time_ms=processing_time_ms,
             error_code=code.value,
         )
-        status = 400 if code != ErrorCode.INTERNAL_ERROR else 500
         client_msg = (
             "An unexpected error occurred."
             if code == ErrorCode.INTERNAL_ERROR
