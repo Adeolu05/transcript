@@ -31,6 +31,17 @@ class Settings(BaseSettings):
     # When True, GET /download counts against a light shared bucket; default off
     rate_limit_download_enabled: bool = False
     rate_limit_download_requests: int = 200
+    # AI summaries: counted only when Claude is actually called (cache hits are free)
+    rate_limit_summarize_requests: int = 3
+
+    # AI summaries (Claude). Empty key = feature hidden and endpoint disabled.
+    anthropic_api_key: str = ""
+    summary_model: str = "claude-opus-5-5"
+    # Summaries are a simple task; low effort keeps thinking (and cost) small
+    summary_effort: str = "low"
+    # ~50K tokens; longer transcripts are refused rather than silently truncated
+    summary_max_input_chars: int = 200_000
+    summary_timeout_seconds: float = 90.0
 
     # Optional shared store (e.g. redis://...). When set, rate limits are counted
     # across all Gunicorn workers + the Telegram bot, and bot preferences survive

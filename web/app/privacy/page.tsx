@@ -95,6 +95,19 @@ export default function PrivacyPage() {
 
           <section>
             <h2 className="text-base font-semibold tracking-tight" style={{ color: "var(--text)" }}>
+              AI summaries
+            </h2>
+            <p className="mt-3">
+              Summaries are optional and only generated when you ask for one. To create it, we send
+              the video&apos;s caption text to Anthropic (the Claude API), which processes it under its
+              commercial terms. We don&apos;t send your IP address or any account details with it. The
+              resulting summary is cached with the caption cache for the same limited period, so
+              repeat requests for the same video don&apos;t send the captions again.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-base font-semibold tracking-tight" style={{ color: "var(--text)" }}>
               Telegram preferences
             </h2>
             <p className="mt-3">

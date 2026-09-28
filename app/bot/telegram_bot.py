@@ -29,6 +29,7 @@ from app.core.errors import AppError, ErrorCode, TranscriptFetchError
 from app.core.config import settings
 from app.core.languages import SUPPORTED_LANGUAGES, LANGUAGE_CODES, language_name, languages_match
 from app.services.pdf_fonts import UnsupportedPdfScript
+from app.services import summary_service
 from app.utils.logging_config import logger
 from app.services.analytics_service import AnalyticsService
 from app.services.telemetry_service import TelemetryService, hash_identifier, bucket_duration
@@ -155,6 +156,7 @@ PRIVACY_TEXT = (
     "\\• Generated files auto\\-delete after about 1 hour\\.\n"
     "\\• Short\\-term caption cache \\(up to a few days\\) may reduce repeat fetches\\.\n"
     "\\• Your format, timestamp and language preference is remembered for about 90 days\\.\n"
+    "\\• AI summaries send the caption text to Anthropic \\(Claude\\), only when you ask\\.\n"
     "\\• We do not keep permanent user accounts or history\\.\n"
     "\\• See the website privacy page for full details\\."
 )
@@ -202,6 +204,11 @@ def _ready_keyboard(include_timestamps: bool) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Preview", callback_data="preview"),
                 InlineKeyboardButton(ts_text, callback_data="ts_toggle"),
             ],
+            *(
+                [[InlineKeyboardButton("AI summary", callback_data="summary")]]
+                if summary_service.summaries_enabled()
+                else []
+            ),
             [
                 InlineKeyboardButton("New link", callback_data="new_link"),
             ],
@@ -644,6 +651,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await _handle_preview(query, context)
     elif data == "ts_toggle":
         await _handle_timestamp_toggle(query, context)
+    elif data == "summary":
+        await _handle_summary(query, context)
     elif data == "new_link":
         await _handle_new_link(query, context)
     elif data.startswith("preview_dl|"):
@@ -827,6 +836,67 @@ async def _handle_timestamp_toggle(query, context: ContextTypes.DEFAULT_TYPE) ->
         )
     except Exception as e:
         logger.error(f"Could not edit status message on ts toggle: {e}")
+
+
+# ---------------------------------------------------------------------------
+# AI summary callback
+# ---------------------------------------------------------------------------
+
+_TELEGRAM_MAX_MESSAGE = 4096
+
+
+def _summary_text(summary: dict) -> str:
+    parts = ["AI summary", "", summary["tldr"]]
+    if summary["key_points"]:
+        parts += ["", "Key points", *(f"\u2022 {p}" for p in summary["key_points"])]
+    if summary["chapters"]:
+        parts += ["", "Chapters"]
+        parts += [
+            f"{summary_service.format_timestamp(c['start_seconds'])}  {c['title']}"
+            for c in summary["chapters"]
+        ]
+    text = "\n".join(parts)
+    return text if len(text) <= _TELEGRAM_MAX_MESSAGE else text[: _TELEGRAM_MAX_MESSAGE - 1] + "\u2026"
+
+
+async def _handle_summary(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    transcript_data = context.user_data.get("transcript_data")
+    if not transcript_data:
+        await query.answer("Session expired. Send the link again.")
+        return
+    if context.user_data.get("_summarizing"):
+        await query.answer("Already summarizing\u2026")
+        return
+
+    user_id = str(query.from_user.id)
+    _emit_event("tg_summary_clicked", user_id)
+    provider = transcript_data.get("provider", "youtube")
+    video_id = transcript_data.get("video_id", "")
+    language = transcript_data.get("language") or "en"
+
+    summary = summary_service.get_cached_summary(provider, video_id, language)
+    if summary is None and not check_rate_limit(f"tg_{user_id}", bucket="summarize"):
+        await query.answer("Daily summary limit reached. Try again tomorrow.", show_alert=True)
+        return
+
+    await query.answer("Summarizing\u2026")
+    context.user_data["_summarizing"] = True
+    try:
+        if summary is None:
+            summary = await asyncio.to_thread(
+                summary_service.generate_summary,
+                transcript_data["segments"],
+                provider=provider,
+                video_id=video_id,
+                language=language,
+                duration_seconds=int(transcript_data.get("duration_seconds") or 0),
+            )
+        text = _summary_text(summary)
+    except AppError as e:
+        text = e.message
+    finally:
+        context.user_data["_summarizing"] = False
+    await context.bot.send_message(chat_id=query.message.chat_id, text=text)
 
 
 # ---------------------------------------------------------------------------

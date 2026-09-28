@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.dependencies import (
+    check_summarize_quota,
     verify_rate_limit_convert,
     verify_rate_limit_download,
     verify_rate_limit_events,
@@ -35,6 +36,7 @@ from app.services.file_service import (
 )
 from app.services.formatter_service import SUBTITLE_FORMATS, TranscriptFormatter
 from app.services.pdf_fonts import UnsupportedPdfScript, pdf_supported
+from app.services import summary_service
 from app.services.metadata_service import MetadataService
 from app.services.telemetry_service import MAX_PAYLOAD_BYTES, TelemetryService
 from app.services.transcript_service import get_transcript_from_url
@@ -222,7 +224,18 @@ async def extract_transcript(request: ExtractRequest):
     await asyncio.to_thread(write_sidecar, filename, "segments", transcript_data["segments"])
     out_language = transcript_data.get("language", DEFAULT_LANGUAGE)
     # Language picks the CJK PDF font (zh-Hant vs zh-Hans) at convert time
-    write_sidecar(filename, "meta", {"title": transcript_data.get("title"), "language": out_language})
+    write_sidecar(
+        filename,
+        "meta",
+        {
+            "title": transcript_data.get("title"),
+            "language": out_language,
+            # Summary cache key + chapter bounds
+            "provider": transcript_data.get("provider", platform),
+            "video_id": transcript_data.get("video_id"),
+            "duration_seconds": duration,
+        },
+    )
     can_pdf = await asyncio.to_thread(pdf_supported, formatted_text)
     source_language = transcript_data.get("source_language") or out_language
     translated = bool(transcript_data.get("translated"))
@@ -395,8 +408,44 @@ async def get_public_config():
             "file_ttl_hours": settings.file_ttl_hours,
             "default_language": DEFAULT_LANGUAGE,
             "languages": public_language_list(),
+            "summaries_enabled": summary_service.summaries_enabled(),
         }
     )
+
+
+class SummarizeRequest(BaseModel):
+    file_id: str
+
+
+@router.post("/summarize")
+async def summarize(body: SummarizeRequest, request: Request):
+    """AI summary (TL;DR, key points, chapters) of an extracted transcript."""
+    _validate_file_id(body.file_id)
+    if not summary_service.summaries_enabled():
+        raise AppError(ErrorCode.SUMMARY_UNAVAILABLE, "Summaries aren't available right now.", 503)
+
+    meta = read_sidecar(body.file_id, "meta") or {}
+    segments = await asyncio.to_thread(read_sidecar, body.file_id, "segments")
+    if not isinstance(segments, list) or not meta.get("video_id"):
+        raise AppError(ErrorCode.FILE_EXPIRED, "Transcript not found or expired.", 404)
+
+    provider, video_id = meta.get("provider", "youtube"), meta["video_id"]
+    language = meta.get("language") or DEFAULT_LANGUAGE
+
+    summary = summary_service.get_cached_summary(provider, video_id, language)
+    cached = summary is not None
+    if not cached:
+        check_summarize_quota(request)
+        summary = await asyncio.to_thread(
+            summary_service.generate_summary,
+            segments,
+            provider=provider,
+            video_id=video_id,
+            language=language,
+            duration_seconds=int(meta.get("duration_seconds") or 0),
+        )
+
+    return success_response({**summary, "provider": provider, "video_id": video_id, "cached": cached})
 
 
 class EventRequest(BaseModel):
