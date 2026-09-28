@@ -13,10 +13,15 @@ from typing import Any, Dict
 import redis
 
 from app.core.config import settings
+from app.core.languages import DEFAULT_LANGUAGE, LANGUAGE_CODES
 from app.core.redis_client import get_redis, warn_fallback
 
 FILE_FORMATS = ("txt", "pdf", "docx", "srt", "vtt")
-DEFAULTS: Dict[str, Any] = {"last_file_format": "txt", "last_include_timestamps": False}
+DEFAULTS: Dict[str, Any] = {
+    "last_file_format": "txt",
+    "last_include_timestamps": False,
+    "language": DEFAULT_LANGUAGE,
+}
 
 _memory: Dict[str, Dict[str, Any]] = {}
 
@@ -30,6 +35,8 @@ def _decode(raw: Dict[str, str]) -> Dict[str, Any]:
     prefs = dict(DEFAULTS)
     if raw.get("last_file_format") in FILE_FORMATS:
         prefs["last_file_format"] = raw["last_file_format"]
+    if raw.get("language") in LANGUAGE_CODES:
+        prefs["language"] = raw["language"]
     if raw.get("last_include_timestamps") in ("0", "1"):
         prefs["last_include_timestamps"] = raw["last_include_timestamps"] == "1"
     return prefs

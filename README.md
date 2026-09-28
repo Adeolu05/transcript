@@ -10,6 +10,7 @@ Core Value: **Fast → Reliable → Structured → Downloadable.**
 
 - **Multi-Platform Support**: Extract transcripts from **YouTube** and **Vimeo** instantly.
 - **Clean Formats**: Download as **TXT, PDF, and DOCX**, or **SRT / VTT** subtitles with cue timings. Files are named after the video title.
+- **23 Languages**: Pick the transcript language on the web or with `/language` in Telegram. YouTube auto-translates when a video has no captions in that language; Vimeo uses the uploader's tracks.
 - **Timestamps**: Toggle perfectly formatted timestamps on or off.
 - **Anonymous & Secure**: No accounts required. Generated files auto-delete after ~1 hour (TTL). Optional short-term caption cache (`TRANSCRIPT_CACHE_TTL_HOURS`) is pruned by the same cleanup loop.
 - **Rate Limited & Guardrailed**: Separate extract vs convert quotas (shared across workers and the bot via optional Redis), max video duration (with caption-based fallback), segment/size caps, and timeout protections.

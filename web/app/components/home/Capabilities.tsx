@@ -3,6 +3,7 @@ import React from 'react';
 const items = [
     { label: 'Sources', description: 'YouTube and Vimeo links' },
     { label: 'Output', description: 'TXT (default), PDF, DOCX, SRT, VTT' },
+    { label: 'Languages', description: '23 languages, auto-translated by YouTube' },
     { label: 'Formatting', description: 'Clean text or timestamps' },
     { label: 'Preview', description: 'Short preview before download' },
     { label: 'Privacy', description: 'No account required' },

@@ -12,6 +12,7 @@ from youtube_transcript_api import IpBlocked
 
 from app.core.errors import ErrorCode, TranscriptFetchError
 from app.main import app
+from app.services.rate_limit_service import rate_limiter
 from app.services import transcript_service as ts
 from app.services.vimeo_service import get_vimeo_transcript
 
@@ -127,6 +128,10 @@ class TestDeadline(unittest.TestCase):
 
 
 class TestBlockedResponse(unittest.TestCase):
+
+    def setUp(self):
+        # All TestClient requests share one "IP"; other suites' extracts must not exhaust its quota
+        rate_limiter._store.clear()
     @patch("app.api.v1_routes.get_transcript_from_url")
     def test_ip_block_returns_503_with_own_code(self, mock_fetch):
         mock_fetch.side_effect = ts._youtube_fetch_error(IpBlocked("vid"))

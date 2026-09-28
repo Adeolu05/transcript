@@ -43,8 +43,8 @@ class TestGetTranscriptFromUrl(unittest.TestCase):
             "segments": [],
         }
         url = "https://vimeo.com/999"
-        result = get_transcript_from_url(url, deadline=123.0)
-        mock_vm.assert_called_once_with("999", url=url, deadline=123.0)
+        result = get_transcript_from_url(url, deadline=123.0, language="de")
+        mock_vm.assert_called_once_with("999", url=url, deadline=123.0, target_language="de")
         self.assertEqual(result["provider"], "vimeo")
 
     @patch("app.services.transcript_service.get_youtube_transcript")
