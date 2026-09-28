@@ -312,8 +312,9 @@ async def _process_url(
 
     try:
         # Extract (with timeout) -----------------------------------------
+        deadline = time.monotonic() + settings.transcript_timeout_seconds
         transcript_data = await asyncio.wait_for(
-            asyncio.to_thread(get_transcript_from_url, url),
+            asyncio.to_thread(get_transcript_from_url, url, deadline),
             timeout=settings.transcript_timeout_seconds,
         )
 
