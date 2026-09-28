@@ -18,16 +18,13 @@ from telegram.ext import (
 from dotenv import load_dotenv
 
 from app.utils.validators import detect_platform
-from app.services.transcript_service import (
-    get_transcript_from_url,
-    YOUTUBE_TRANSCRIPT_UNAVAILABLE_EN_ONLY,
-)
-from app.services.formatter_service import TranscriptFormatter
-from app.services.file_service import FileGenerator
+from app.services.transcript_service import get_transcript_from_url
+from app.services.formatter_service import SUBTITLE_FORMATS, TranscriptFormatter
+from app.services.file_service import FileGenerator, download_filename
 from app.services.rate_limit_service import check_rate_limit
 from app.services.metadata_service import MetadataService
 from app.services.extract_guardrails import enforce_transcript_guardrails
-from app.core.errors import AppError, ErrorCode
+from app.core.errors import AppError, ErrorCode, TranscriptFetchError
 from app.core.config import settings
 from app.utils.logging_config import logger
 from app.services.analytics_service import AnalyticsService
@@ -125,6 +122,7 @@ WELCOME_TEXT = (
     "\\• YouTube: English captions only at this time\n"
     "\\• TXT \\(default\\)\n"
     "\\• PDF / DOCX\n"
+    "\\• SRT / VTT subtitles\n"
     "\\• Optional timestamps\n"
     "\\• No account required\n"
     "\\• Download files expire after about 1 hour\n\n"
@@ -137,7 +135,7 @@ HELP_TEXT = (
     "*How to use Transcript Flow*\n\n"
     "1\\. Send a YouTube or Vimeo link\\.\n"
     "2\\. Preview the transcript\\.\n"
-    "3\\. Download as TXT, PDF, or DOCX\\.\n\n"
+    "3\\. Download as TXT, PDF, DOCX, SRT, or VTT\\.\n\n"
     "Power users:\n"
     "`/extract <link>`\n\n"
     "If extraction fails:\n"
@@ -150,7 +148,9 @@ FORMATS_TEXT = (
     "*Available formats*\n\n"
     "TXT  \\– Clean plain text\n"
     "PDF  \\– Printable document\n"
-    "DOCX \\– Editable Word file\n\n"
+    "DOCX \\– Editable Word file\n"
+    "SRT  \\– Subtitles with timings\n"
+    "VTT  \\– Web subtitles with timings\n\n"
     "Optional:\n"
     "\\• Include timestamps\n\n"
     "Default format is TXT\\."
@@ -201,6 +201,10 @@ def _ready_keyboard(include_timestamps: bool) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Download DOCX", callback_data="dl|docx"),
             ],
             [
+                InlineKeyboardButton("Download SRT", callback_data="dl|srt"),
+                InlineKeyboardButton("Download VTT", callback_data="dl|vtt"),
+            ],
+            [
                 InlineKeyboardButton("Preview", callback_data="preview"),
                 InlineKeyboardButton(ts_text, callback_data="ts_toggle"),
             ],
@@ -233,6 +237,17 @@ def _start_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("Help", callback_data="help"),
         ],
     ])
+
+
+async def _build_file(transcript_data: dict, formatted_text: str, ext: str) -> str:
+    """Generate *ext* off the event loop (PDF builds can take seconds)."""
+    if ext in SUBTITLE_FORMATS:
+        content = await asyncio.to_thread(
+            TranscriptFormatter.format_subtitles, transcript_data["segments"], ext
+        )
+    else:
+        content = formatted_text
+    return await asyncio.to_thread(FileGenerator.generate_file, content, ext)
 
 
 def _extract_url_from_text(text: str) -> str | None:
@@ -308,8 +323,8 @@ async def _process_url(
         # State B — Formatting -------------------------------------------
         await status_msg.edit_text("Transcript Flow\n\nFormatting transcript\u2026")
 
-        formatted_text = TranscriptFormatter.format(
-            transcript_data["segments"], format_type=fmt_type
+        formatted_text = await asyncio.to_thread(
+            TranscriptFormatter.format, transcript_data["segments"], fmt_type
         )
         enforce_transcript_guardrails(transcript_data, formatted_text=formatted_text)
         metrics = MetadataService.calculate_metrics(formatted_text)
@@ -318,7 +333,7 @@ async def _process_url(
         await status_msg.edit_text("Transcript Flow\n\nPreparing file\u2026")
 
         video_id = transcript_data.get("video_id", "unknown")
-        file_path = FileGenerator.generate_file(formatted_text, file_ext)
+        file_path = await _build_file(transcript_data, formatted_text, file_ext)
 
         # State D — Ready ------------------------------------------------
         ready = _ready_text(
@@ -371,21 +386,12 @@ async def _process_url(
         )
         await status_msg.edit_text(msg)
     except Exception as e:
-        err_msg = str(e).lower()
-        logger.error("Error processing URL: %s", e)
-
-        if (
-            "disabled" in err_msg
-            or "not found" in err_msg
-            or "unavailable" in err_msg
-            or "no transcript or captions" in err_msg
-        ):
-            friendly = ERROR_MESSAGES[ErrorCode.TRANSCRIPT_NOT_AVAILABLE]
-            error_code = "TRANSCRIPT_NOT_AVAILABLE"
-        elif "youtube blocked" in err_msg or "only available in english" in err_msg:
-            friendly = YOUTUBE_TRANSCRIPT_UNAVAILABLE_EN_ONLY
-            error_code = "TRANSCRIPT_NOT_AVAILABLE"
+        if isinstance(e, TranscriptFetchError):
+            # Service messages are written for end users (e.g. "disabled", "blocked")
+            friendly = e.message
+            error_code = e.code.value
         else:
+            logger.exception("Error processing URL")
             friendly = ERROR_MESSAGES[ErrorCode.INTERNAL_ERROR]
             error_code = "INTERNAL_ERROR"
 
@@ -584,29 +590,29 @@ async def _handle_download(query, context: ContextTypes.DEFAULT_TYPE, ext: str) 
 
     try:
         formatted_text = context.user_data.get("formatted_text")
-        video_id = context.user_data.get("video_id", "unknown")
+        transcript_data = context.user_data.get("transcript_data") or {}
         user_id = str(query.from_user.id)
 
         _emit_event("tg_download_clicked", user_id, {"file_format": ext})
 
-        if not formatted_text:
+        if not formatted_text or not transcript_data:
             await query.answer("Session expired. Send the link again.")
             context.user_data["_processing"] = False
             return
 
-        # Re-use cached file if extension matches, otherwise regenerate ---
-        cached_ext = context.user_data.get("file_ext")
-        if ext == cached_ext and context.user_data.get("file_path"):
-            file_path = context.user_data["file_path"]
+        # Re-use cached file if extension matches and TTL cleanup hasn't removed it
+        cached_path = context.user_data.get("file_path")
+        if ext == context.user_data.get("file_ext") and cached_path and os.path.exists(cached_path):
+            file_path = cached_path
         else:
-            file_path = FileGenerator.generate_file(formatted_text, ext)
+            file_path = await _build_file(transcript_data, formatted_text, ext)
 
         # Send file -------------------------------------------------------
         with open(file_path, "rb") as f:
             await context.bot.send_document(
                 chat_id=query.message.chat_id,
                 document=f,
-                filename=f"transcriptflow_{video_id}.{ext}",
+                filename=download_filename(transcript_data.get("title"), ext),
             )
 
         # Update preference ------------------------------------------------
@@ -705,14 +711,14 @@ async def _handle_timestamp_toggle(query, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Re-format with new timestamp state ----------------------------------
     fmt_type = _format_type_for_prefs(new_ts)
-    formatted_text = TranscriptFormatter.format(
-        transcript_data["segments"], format_type=fmt_type
+    formatted_text = await asyncio.to_thread(
+        TranscriptFormatter.format, transcript_data["segments"], fmt_type
     )
     metrics = MetadataService.calculate_metrics(formatted_text)
 
     # Regenerate file in current preferred format -------------------------
     file_ext = prefs["last_file_format"]
-    file_path = FileGenerator.generate_file(formatted_text, file_ext)
+    file_path = await _build_file(transcript_data, formatted_text, file_ext)
 
     # Update cache --------------------------------------------------------
     context.user_data["formatted_text"] = formatted_text

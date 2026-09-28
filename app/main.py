@@ -8,6 +8,7 @@ from app.api import metrics_routes, v1_routes
 from app.core.config import settings
 from app.core.errors import AppError, ErrorCode, error_response
 from app.services.file_service import FileGenerator, TEMP_DIR
+from app.services.transcript_cache_service import prune_transcript_cache
 from app.utils.logging_config import logger
 
 
@@ -98,6 +99,9 @@ async def _cleanup_loop() -> None:
             )
             if deleted:
                 logger.info("In-process cleanup deleted %s file(s) from %s", deleted, TEMP_DIR)
+            pruned = await asyncio.to_thread(prune_transcript_cache)
+            if pruned:
+                logger.info("In-process cleanup pruned %s expired cache entr(ies)", pruned)
         except asyncio.CancelledError:
             raise
         except Exception as e:

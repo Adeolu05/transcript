@@ -1,5 +1,10 @@
 import re
-from typing import List, Dict
+from typing import List, Dict, Tuple
+
+# Timed formats built from caption segments rather than the formatted prose.
+SUBTITLE_FORMATS = ("srt", "vtt")
+# Floor for zero/negative-length cues so every subtitle is visible.
+_MIN_CUE_SECONDS = 0.5
 
 # YouTube auto-captions and many ASR tracks use >> as a hard turn / beat marker.
 _ARTIFACT_GTGT = re.compile(r"\s*>>\s*")
@@ -148,6 +153,68 @@ class TranscriptFormatter:
             line = _MULTI_SPACE.sub(" ", line).strip()
             formatted_text += f"{timestamp} {line}\n"
         return formatted_text
+
+    @staticmethod
+    def _subtitle_cues(transcript: List[Dict]) -> List[Tuple[float, float, str]]:
+        """
+        (start, end, text) per non-empty cue. Auto-captions overlap heavily, so each
+        cue ends no later than the next one starts — otherwise players stack lines.
+        """
+        entries = []
+        for entry in transcript:
+            text = _ARTIFACT_GTGT.sub(" ", entry.get("text") or "")
+            # A blank line inside a cue would end it early in SRT/VTT
+            text = "\n".join(
+                _MULTI_SPACE.sub(" ", line).strip() for line in text.splitlines() if line.strip()
+            )
+            if text:
+                start = max(0.0, float(entry.get("start") or 0))
+                entries.append((start, start + float(entry.get("duration") or 0), text))
+
+        cues = []
+        for i, (start, end, text) in enumerate(entries):
+            if i + 1 < len(entries) and entries[i + 1][0] > start:
+                end = min(end, entries[i + 1][0])
+            if end <= start:
+                end = start + _MIN_CUE_SECONDS
+            cues.append((start, end, text))
+        return cues
+
+    @staticmethod
+    def _subtitle_timestamp(seconds: float, ms_sep: str) -> str:
+        total_ms = int(round(seconds * 1000))
+        h, rem = divmod(total_ms, 3_600_000)
+        m, rem = divmod(rem, 60_000)
+        s, ms = divmod(rem, 1000)
+        return f"{h:02}:{m:02}:{s:02}{ms_sep}{ms:03}"
+
+    @staticmethod
+    def format_srt(transcript: List[Dict]) -> str:
+        ts = TranscriptFormatter._subtitle_timestamp
+        blocks = [
+            f"{i}\n{ts(start, ',')} --> {ts(end, ',')}\n{text}\n"
+            for i, (start, end, text) in enumerate(
+                TranscriptFormatter._subtitle_cues(transcript), start=1
+            )
+        ]
+        return "\n".join(blocks)
+
+    @staticmethod
+    def format_vtt(transcript: List[Dict]) -> str:
+        ts = TranscriptFormatter._subtitle_timestamp
+        blocks = [
+            f"{ts(start, '.')} --> {ts(end, '.')}\n{text}\n"
+            for start, end, text in TranscriptFormatter._subtitle_cues(transcript)
+        ]
+        return "WEBVTT\n\n" + "\n".join(blocks)
+
+    @staticmethod
+    def format_subtitles(transcript: List[Dict], file_format: str) -> str:
+        if file_format == "srt":
+            return TranscriptFormatter.format_srt(transcript)
+        if file_format == "vtt":
+            return TranscriptFormatter.format_vtt(transcript)
+        raise ValueError(f"Not a subtitle format: {file_format}")
 
     @staticmethod
     def format(transcript: List[Dict], format_type: str = "clean") -> str:

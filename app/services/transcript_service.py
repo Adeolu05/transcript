@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from youtube_transcript_api import (
     YouTubeTranscriptApi,
+    CouldNotRetrieveTranscript,
     Transcript,
     TranscriptList,
     TranscriptsDisabled,
@@ -26,11 +27,12 @@ from app.services.transcript_cache_service import (
     write_transcript_cache,
 )
 from app.core.config import settings
+from app.core.errors import ErrorCode, TranscriptFetchError
 
-# User-facing when YouTube blocks our IP (shown in API, bot, etc.).
+# User-facing when YouTube IpBlocked / RequestBlocked (cloud IPs are often banned).
 YOUTUBE_TRANSCRIPT_UNAVAILABLE_EN_ONLY = (
-    "Transcripts are only available in English at this time, and we could not load "
-    "captions for this video. Please try again later."
+    "We could not load captions because YouTube blocked this server. "
+    "Please try again later."
 )
 
 # Fallback search order after the client’s target language (never English-only).
@@ -132,36 +134,31 @@ def _youtube_api() -> YouTubeTranscriptApi:
 
 
 def get_transcript_from_url(url: str) -> Dict:
-    """Fetch transcript. YouTube captions are always resolved to English (native or auto-translate)."""
+    """
+    Fetch transcript. YouTube captions are always resolved to English (native or auto-translate).
+    Raises TranscriptFetchError for expected failures; anything else is a bug.
+    """
     try:
         platform = detect_platform(url)
-
-        if platform == "youtube":
-            video_id = validate_youtube_url(url)
-            cached = read_transcript_cache("youtube", video_id)
-            if cached is not None:
-                out = dict(cached)
-                if url:
-                    out["source_url"] = url
-                return out
-            result = get_youtube_transcript(video_id, url=url)
-            write_transcript_cache("youtube", video_id, result)
-            return result
-        if platform == "vimeo":
-            video_id = validate_vimeo_url(url)
-            cached = read_transcript_cache("vimeo", video_id)
-            if cached is not None:
-                out = dict(cached)
-                if url:
-                    out["source_url"] = url
-                return out
-            result = get_vimeo_transcript(video_id, url=url)
-            write_transcript_cache("vimeo", video_id, result)
-            return result
-        raise ValueError(f"Unsupported platform: {platform}")
-
+        video_id = (
+            validate_youtube_url(url) if platform == "youtube" else validate_vimeo_url(url)
+        )
     except ValueError as e:
-        raise Exception(str(e)) from e
+        raise TranscriptFetchError(ErrorCode.INVALID_URL, str(e)) from e
+
+    cached = read_transcript_cache(platform, video_id)
+    if cached is not None:
+        out = dict(cached)
+        if url:
+            out["source_url"] = url
+        return out
+
+    if platform == "youtube":
+        result = get_youtube_transcript(video_id, url=url)
+    else:
+        result = get_vimeo_transcript(video_id, url=url)
+    write_transcript_cache(platform, video_id, result)
+    return result
 
 
 def _get_youtube_metadata(video_id: str) -> Dict:
@@ -294,6 +291,23 @@ def _youtube_transcript_fresh_core(
     }
 
 
+def _youtube_fetch_error(e: CouldNotRetrieveTranscript) -> TranscriptFetchError:
+    """Map youtube-transcript-api failures to a user-safe TranscriptFetchError."""
+    na = ErrorCode.TRANSCRIPT_NOT_AVAILABLE
+    if isinstance(e, (IpBlocked, RequestBlocked)):
+        return TranscriptFetchError(na, YOUTUBE_TRANSCRIPT_UNAVAILABLE_EN_ONLY)
+    if isinstance(e, TranscriptsDisabled):
+        return TranscriptFetchError(na, "Transcripts are disabled for this video.")
+    if isinstance(e, VideoUnavailable):
+        return TranscriptFetchError(na, "Video is unavailable.")
+    if isinstance(e, NoTranscriptFound):
+        return TranscriptFetchError(
+            na,
+            "No transcript or captions are available for this video in any language we could access.",
+        )
+    return TranscriptFetchError(na, "Captions could not be retrieved for this video.")
+
+
 def get_youtube_transcript(
     video_id: str,
     languages: Optional[List[str]] = None,
@@ -304,52 +318,19 @@ def get_youtube_transcript(
     English-only: prefer English captions, else translate to English when available.
     With residential proxy configured, retries a few times on IpBlocked / RequestBlocked.
     """
-    if languages is not None:
-        try:
-            return _youtube_transcript_fresh_core(video_id, languages, url)
-        except TranscriptsDisabled:
-            raise Exception("Transcripts are disabled for this video.") from None
-        except VideoUnavailable:
-            raise Exception("Video is unavailable.") from None
-        except NoTranscriptFound:
-            raise Exception(
-                "No transcript or captions are available for this video in any language we could access."
-            ) from None
-        except (IpBlocked, RequestBlocked):
-            raise Exception(YOUTUBE_TRANSCRIPT_UNAVAILABLE_EN_ONLY) from None
-        except Exception as e:
-            err_msg = str(e)
-            if "No transcript found" in err_msg:
-                raise Exception(
-                    "No transcript found for the requested languages."
-                ) from e
-            raise
-
-    attempts = _youtube_ip_block_attempts()
+    attempts = 1 if languages is not None else _youtube_ip_block_attempts()
     for attempt in range(attempts):
         try:
-            return _youtube_transcript_fresh_core(video_id, None, url)
+            return _youtube_transcript_fresh_core(video_id, languages, url)
         except (IpBlocked, RequestBlocked) as e:
             if attempt < attempts - 1:
                 delay = settings.youtube_transcript_retry_backoff_seconds * (attempt + 1)
                 time.sleep(delay + random.uniform(0, 0.25))
                 continue
-            raise Exception(YOUTUBE_TRANSCRIPT_UNAVAILABLE_EN_ONLY) from e
-        except TranscriptsDisabled:
-            raise Exception("Transcripts are disabled for this video.") from None
-        except VideoUnavailable:
-            raise Exception("Video is unavailable.") from None
-        except NoTranscriptFound:
-            raise Exception(
-                "No transcript or captions are available for this video in any language we could access."
-            ) from None
-        except Exception as e:
-            err_msg = str(e)
-            if "No transcript found" in err_msg:
-                raise Exception(
-                    "No transcript found for the requested languages."
-                ) from e
-            raise
+            raise _youtube_fetch_error(e) from e
+        except CouldNotRetrieveTranscript as e:
+            raise _youtube_fetch_error(e) from e
+    raise AssertionError("unreachable")
 
 
 def get_transcript(video_id: str, languages: Optional[List[str]] = None) -> Optional[Dict]:

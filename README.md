@@ -9,9 +9,9 @@ Core Value: **Fast → Reliable → Structured → Downloadable.**
 ## 🌟 Key Features
 
 - **Multi-Platform Support**: Extract transcripts from **YouTube** and **Vimeo** instantly.
-- **Clean Formats**: Download as **TXT, PDF, and DOCX**.
+- **Clean Formats**: Download as **TXT, PDF, and DOCX**, or **SRT / VTT** subtitles with cue timings. Files are named after the video title.
 - **Timestamps**: Toggle perfectly formatted timestamps on or off.
-- **Anonymous & Secure**: No accounts required. Generated files auto-delete after ~1 hour (TTL). Optional short-term caption cache (hours) for reliability.
+- **Anonymous & Secure**: No accounts required. Generated files auto-delete after ~1 hour (TTL). Optional short-term caption cache (`TRANSCRIPT_CACHE_TTL_HOURS`) is pruned by the same cleanup loop.
 - **Rate Limited & Guardrailed**: Separate extract vs convert quotas, max video duration (with caption-based fallback), segment/size caps, and timeout protections.
 - **Telemetry & Analytics**: Built-in lightweight JSON-structured logging and analytics tracking.
 
@@ -48,13 +48,13 @@ transcript/
 ### 1. Web Application (`/web`)
 A premium, modern SaaS web app interface designed with:
 - 3D Video Carousel hero section.
-- Preview-First Results Flow: Shows a snippet of the transcript immediately, followed by format selection (TXT/PDF/DOCX).
+- Preview-First Results Flow: Shows a snippet of the transcript immediately, followed by format selection (TXT/PDF/DOCX/SRT/VTT).
 - Clean state-machine interactions (Idle → Processing → Success/Error).
 
 ### 2. Telegram Bot (`app/bot/telegram_bot.py`)
 A seriously structured, minimal utility bot:
 - **Instant Processing**: Send a URL, get a file. No conversational fluff.
-- **In-Memory Preferences**: Remembers your preferred format (e.g., PDF) and timestamp preferences across sessions.
+- **In-Memory Preferences**: Remembers your preferred format (e.g., PDF) and timestamp setting while the bot process runs (reset on restart/deploy).
 - **Single Message UX**: Status updates (Extracting... $\rightarrow$ Formatting... $\rightarrow$ Ready) happen within a single edited message to keep chat history clean.
 - **Branded Onboarding**: Clean `/start` experience with inline keyboard routing.
 

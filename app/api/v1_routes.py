@@ -15,11 +15,18 @@ from app.core.dependencies import (
     verify_rate_limit_events,
     verify_rate_limit_extract,
 )
-from app.core.errors import AppError, ErrorCode, success_response
+from app.core.errors import AppError, ErrorCode, TranscriptFetchError, success_response
 from app.services.analytics_service import AnalyticsService
 from app.services.extract_guardrails import enforce_transcript_guardrails
-from app.services.file_service import TEMP_DIR, FileGenerator
-from app.services.formatter_service import TranscriptFormatter
+from app.services.file_service import (
+    TEMP_DIR,
+    FileGenerator,
+    content_disposition,
+    download_filename,
+    read_sidecar,
+    write_sidecar,
+)
+from app.services.formatter_service import SUBTITLE_FORMATS, TranscriptFormatter
 from app.services.metadata_service import MetadataService
 from app.services.telemetry_service import MAX_PAYLOAD_BYTES, TelemetryService
 from app.services.transcript_service import get_transcript_from_url
@@ -28,7 +35,14 @@ from app.utils.validators import detect_platform
 
 router = APIRouter(prefix="/v1")
 
-_ALLOWED_EXTENSIONS = {".txt", ".pdf", ".docx"}
+_CONVERT_FORMATS = ("txt", "pdf", "docx", *SUBTITLE_FORMATS)
+_ALLOWED_EXTENSIONS = {f".{fmt}" for fmt in _CONVERT_FORMATS}
+_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".srt": "application/x-subrip",
+    ".vtt": "text/vtt",
+}
 _convert_semaphore = asyncio.Semaphore(settings.convert_max_concurrency)
 _UUID_HEX_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -109,17 +123,11 @@ async def extract_transcript(request: ExtractRequest):
     except Exception as e:
         err_msg = str(e)
         processing_time_ms = int((time.time() - start_time) * 1000)
-        el = err_msg.lower()
-        if "disabled" in el:
-            code = ErrorCode.TRANSCRIPT_NOT_AVAILABLE
-        elif "unavailable" in el or "not found" in el or "no transcript or captions" in el:
-            code = ErrorCode.TRANSCRIPT_NOT_AVAILABLE
-        elif "youtube blocked" in el or "only available in english" in el:
-            code = ErrorCode.TRANSCRIPT_NOT_AVAILABLE
-        elif "unsupported" in el:
-            code = ErrorCode.INVALID_URL
+        if isinstance(e, TranscriptFetchError):
+            code = e.code
         else:
             code = ErrorCode.INTERNAL_ERROR
+            logger.exception("Unexpected transcript fetch failure")
         MetadataService.log_failure(
             url=request.url,
             platform=platform,
@@ -194,6 +202,9 @@ async def extract_transcript(request: ExtractRequest):
 
     text_sidecar = TEMP_DIR / f"{filename}.raw"
     text_sidecar.write_text(formatted_text, encoding="utf-8")
+    # Segments feed SRT/VTT convert; title names every download of this transcript
+    await asyncio.to_thread(write_sidecar, filename, "segments", transcript_data["segments"])
+    write_sidecar(filename, "meta", {"title": transcript_data.get("title")})
 
     MetadataService.log_success(
         video_id=transcript_data["video_id"],
@@ -213,7 +224,7 @@ async def extract_transcript(request: ExtractRequest):
         processing_time_ms=processing_time_ms,
     )
 
-    preview_text = formatted_text[:1500]
+    preview_text = formatted_text[: settings.preview_chars]
     expires_at = (
         datetime.now(timezone.utc) + timedelta(hours=settings.file_ttl_hours)
     ).isoformat()
@@ -245,20 +256,14 @@ async def download_file(file_id: str):
         raise AppError(ErrorCode.FILE_EXPIRED, "File not found or expired.", 404)
 
     extension = file_path.suffix.lower()
-    media_type = "text/plain"
-    if extension == ".pdf":
-        media_type = "application/pdf"
-    elif extension == ".docx":
-        media_type = (
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
+    meta = read_sidecar(file_id, "meta") or {}
+    filename = download_filename(meta.get("title"), extension)
 
     return FileResponse(
         path=str(file_path),
-        media_type=media_type,
-        filename=f"transcript{extension}",
+        media_type=_MEDIA_TYPES.get(extension, "text/plain"),
         headers={
-            "Content-Disposition": f"attachment; filename=transcript{extension}",
+            "Content-Disposition": content_disposition(filename),
             "Cache-Control": "no-store",
         },
     )
@@ -266,15 +271,15 @@ async def download_file(file_id: str):
 
 class ConvertRequest(BaseModel):
     file_id: str
-    format: str  # txt, pdf, docx
+    format: str  # txt, pdf, docx, srt, vtt
 
 
 @router.post("/convert", dependencies=[Depends(verify_rate_limit_convert)])
 async def convert_file(request: ConvertRequest):
-    if request.format not in ("txt", "pdf", "docx"):
+    if request.format not in _CONVERT_FORMATS:
         raise AppError(
             ErrorCode.CONVERT_FAILED,
-            "Unsupported format. Use txt, pdf, or docx.",
+            "Unsupported format. Use txt, pdf, docx, srt, or vtt.",
             400,
         )
 
@@ -290,18 +295,26 @@ async def convert_file(request: ConvertRequest):
             }
         )
 
-    sidecar_path = TEMP_DIR / f"{request.file_id}.raw"
-    if not sidecar_path.exists():
-        raise AppError(ErrorCode.FILE_EXPIRED, "Source text not found or expired.", 404)
-
-    formatted_text = sidecar_path.read_text(encoding="utf-8")
-
-    if len(formatted_text) > settings.max_raw_text_length:
-        raise AppError(
-            ErrorCode.CONVERT_FAILED,
-            "Transcript is too large to convert to this format.",
-            400,
+    if request.format in SUBTITLE_FORMATS:
+        segments = await asyncio.to_thread(read_sidecar, request.file_id, "segments")
+        if not isinstance(segments, list):
+            raise AppError(ErrorCode.FILE_EXPIRED, "Source captions not found or expired.", 404)
+        # Segment count/size were already capped by the extract guardrails
+        content = await asyncio.to_thread(
+            TranscriptFormatter.format_subtitles, segments, request.format
         )
+    else:
+        sidecar_path = TEMP_DIR / f"{request.file_id}.raw"
+        if not sidecar_path.exists():
+            raise AppError(ErrorCode.FILE_EXPIRED, "Source text not found or expired.", 404)
+        content = sidecar_path.read_text(encoding="utf-8")
+
+        if len(content) > settings.max_raw_text_length:
+            raise AppError(
+                ErrorCode.CONVERT_FAILED,
+                "Transcript is too large to convert to this format.",
+                400,
+            )
 
     # Non-blocking acquire — no TOCTOU with locked() pre-check
     try:
@@ -316,7 +329,7 @@ async def convert_file(request: ConvertRequest):
     try:
         try:
             file_path = await asyncio.to_thread(
-                FileGenerator.generate_file, formatted_text, request.format
+                FileGenerator.generate_file, content, request.format
             )
         except Exception as e:
             logger.error("Convert generation failed: %s", e)
@@ -328,6 +341,10 @@ async def convert_file(request: ConvertRequest):
         filename = os.path.basename(file_path)
     finally:
         _convert_semaphore.release()
+
+    meta = read_sidecar(request.file_id, "meta")
+    if meta:
+        write_sidecar(filename, "meta", meta)
 
     return success_response(
         {

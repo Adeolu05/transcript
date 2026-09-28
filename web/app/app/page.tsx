@@ -69,7 +69,7 @@ export default function AppPage() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-10">
                         {[
                             { num: '01', title: 'Paste link', desc: 'Add a YouTube or Vimeo URL.' },
-                            { num: '02', title: 'Choose output', desc: 'TXT, PDF, or DOCX. Optional timestamps.' },
+                            { num: '02', title: 'Choose output', desc: 'TXT, PDF, DOCX, SRT, or VTT. Optional timestamps.' },
                             { num: '03', title: 'Download', desc: 'Preview in-page, then download the full file.' },
                         ].map(step => (
                             <div key={step.num} className="group">

@@ -65,3 +65,27 @@ def write_transcript_cache(provider: str, video_id: str, data: Dict[str, Any]) -
                 tmp.unlink()
         except OSError:
             pass
+
+
+def prune_transcript_cache() -> int:
+    """
+    Delete cache entries older than the TTL (plus stale .tmp leftovers).
+    Reads already ignore expired entries; this keeps the directory from growing
+    forever and caption text from outliving the advertised retention.
+    TTL 0 means entries never expire, so nothing is pruned.
+    """
+    ttl_sec = max(0, int(settings.transcript_cache_ttl_hours * 3600))
+    directory = cache_dir()
+    if not ttl_sec or not directory.is_dir():
+        return 0
+
+    now = time.time()
+    deleted = 0
+    for path in directory.glob("*.json*"):
+        try:
+            if path.is_file() and now - path.stat().st_mtime > ttl_sec:
+                path.unlink()
+                deleted += 1
+        except OSError:
+            pass
+    return deleted
