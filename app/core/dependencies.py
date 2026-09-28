@@ -4,6 +4,7 @@ from app.services.rate_limit_service import check_rate_limit
 from app.core.config import settings
 from app.core.errors import AppError, ErrorCode
 from app.services.metadata_service import MetadataService
+from app.services.telemetry_service import hash_identifier
 from app.utils.logging_config import logger
 
 
@@ -56,7 +57,7 @@ def _extract_client_ip(request: Request) -> str:
 
 def _raise_if_limited(client_ip: str, bucket: str) -> None:
     if not check_rate_limit(client_ip, bucket=bucket):
-        MetadataService.log_rate_limit_block(identifier=f"{bucket}:{client_ip}")
+        MetadataService.log_rate_limit_block(identifier=f"{bucket}:{hash_identifier(client_ip)}")
         raise AppError(
             ErrorCode.RATE_LIMIT_EXCEEDED,
             "Rate limit exceeded. Try again later.",

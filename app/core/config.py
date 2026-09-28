@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     rate_limit_download_enabled: bool = False
     rate_limit_download_requests: int = 200
 
+    # Optional shared store (e.g. redis://...). When set, rate limits are counted
+    # across all Gunicorn workers + the Telegram bot, and bot preferences survive
+    # restarts. Empty or unreachable = per-process in-memory fallback.
+    redis_url: str = ""
+    telegram_prefs_ttl_days: int = 90
+
+    # Key for HMAC-hashing IPs / Telegram IDs in logs and telemetry. Unset = a
+    # random per-process key (hashes then only correlate within one process).
+    log_hash_secret: str = ""
+
     # Proxy security: how many trusted proxies sit in front of the app.
     # 0 = direct exposure (ignore X-Forwarded-For entirely, use socket IP).
     # 1 = one reverse proxy (Nginx, Cloudflare, etc.).

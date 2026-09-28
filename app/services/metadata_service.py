@@ -3,6 +3,7 @@ from typing import Dict, Any, Optional
 from urllib.parse import urlparse
 
 from app.utils.logging_config import logger
+from app.utils.validators import validate_vimeo_url, validate_youtube_url
 
 
 class MetadataService:
@@ -45,15 +46,20 @@ class MetadataService:
         logger.info(json.dumps(log_data))
 
     @staticmethod
-    def _url_for_log(url: str, max_len: int = 160) -> str:
-        """Host + path only (no query/fragment) to avoid logging tokens or full PII."""
-        if not url:
-            return ""
-        p = urlparse(url)
-        base = f"{p.scheme}://{p.netloc}{p.path}".strip()
-        if len(base) > max_len:
-            return base[: max_len - 1] + "…"
-        return base
+    def _video_ref(url: str, platform: str) -> Dict[str, Optional[str]]:
+        """
+        Public video ID (as success logs already record) plus host — never the
+        raw URL, whose query/path can carry share tokens or tracking params.
+        """
+        validate = {"youtube": validate_youtube_url, "vimeo": validate_vimeo_url}.get(platform)
+        video_id = None
+        if validate and url:
+            try:
+                video_id = validate(url)
+            except ValueError:
+                pass
+        host = (urlparse(url).hostname or "")[:100] if url else ""
+        return {"video_id": video_id, "host": host}
 
     @staticmethod
     def log_failure(
@@ -67,7 +73,7 @@ class MetadataService:
         """Logs a failed extraction workflow as structured JSON."""
         log_data = {
             "event": "transcript_failure",
-            "url": MetadataService._url_for_log(url),
+            **MetadataService._video_ref(url, platform),
             "provider": platform,
             "error_code": error_code,
             "error_message": error_message,

@@ -22,6 +22,7 @@ from app.services.transcript_service import get_transcript_from_url
 from app.services.formatter_service import SUBTITLE_FORMATS, TranscriptFormatter
 from app.services.file_service import FileGenerator, download_filename
 from app.services.rate_limit_service import check_rate_limit
+from app.services import user_prefs_service
 from app.services.metadata_service import MetadataService
 from app.services.extract_guardrails import enforce_transcript_guardrails
 from app.core.errors import AppError, ErrorCode, TranscriptFetchError
@@ -49,29 +50,18 @@ _URL_PATTERN = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# Per-user preferences (Phase 1 — in-memory)
-# ---------------------------------------------------------------------------
-_user_prefs: Dict[str, Dict] = {}
-
-# ---------------------------------------------------------------------------
 # Avatar path (bundled inside app/ for Docker availability)
 # ---------------------------------------------------------------------------
 _AVATAR_PATH = pathlib.Path(__file__).parent / "assets" / "telegram-avatar-1024.png"
 
 
 def _get_prefs(user_id: str) -> dict:
-    """Return preferences for *user_id*, creating defaults if absent."""
-    if user_id not in _user_prefs:
-        _user_prefs[user_id] = {
-            "last_file_format": "txt",
-            "last_include_timestamps": False,
-        }
-    return _user_prefs[user_id]
+    """Preferences for *user_id* (Redis-backed when REDIS_URL is set)."""
+    return user_prefs_service.get_prefs(user_id)
 
 
 def _set_pref(user_id: str, **kwargs) -> None:
-    prefs = _get_prefs(user_id)
-    prefs.update(kwargs)
+    user_prefs_service.set_prefs(user_id, **kwargs)
 
 
 def _emit_event(event_name: str, user_id: str, props: dict | None = None) -> None:
@@ -160,7 +150,8 @@ PRIVACY_TEXT = (
     "*Privacy*\n\n"
     "\\• No account required\\.\n"
     "\\• Generated files auto\\-delete after about 1 hour\\.\n"
-    "\\• Short\\-term caption cache \\(hours\\) may reduce repeat fetches\\.\n"
+    "\\• Short\\-term caption cache \\(up to a few days\\) may reduce repeat fetches\\.\n"
+    "\\• Your format and timestamp preference is remembered for about 90 days\\.\n"
     "\\• We do not keep permanent user accounts or history\\.\n"
     "\\• See the website privacy page for full details\\."
 )
