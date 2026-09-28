@@ -26,14 +26,23 @@ def _safe_video_stem(video_id: str) -> str:
     return s or "invalid"
 
 
-def cache_path(provider: str, video_id: str) -> Path:
-    return cache_dir() / f"{provider}_{_safe_video_stem(video_id)}.json"
+def cache_path(
+    provider: str, video_id: str, language: str = "en", kind: str = "transcript"
+) -> Path:
+    # Language is part of the key: the same video yields different captions per target.
+    # Other kinds (e.g. "summary") share the directory, TTL and pruning.
+    prefix = "" if kind == "transcript" else f"{_safe_video_stem(kind)}_"
+    return cache_dir() / (
+        f"{prefix}{provider}_{_safe_video_stem(video_id)}_{_safe_video_stem(language)}.json"
+    )
 
 
-def read_transcript_cache(provider: str, video_id: str) -> Optional[Dict[str, Any]]:
+def read_transcript_cache(
+    provider: str, video_id: str, language: str = "en", kind: str = "transcript"
+) -> Optional[Dict[str, Any]]:
     if not settings.transcript_cache_enabled:
         return None
-    path = cache_path(provider, video_id)
+    path = cache_path(provider, video_id, language, kind)
     if not path.is_file():
         return None
     ttl_sec = max(0, int(settings.transcript_cache_ttl_hours * 3600))
@@ -49,10 +58,16 @@ def read_transcript_cache(provider: str, video_id: str) -> Optional[Dict[str, An
         return None
 
 
-def write_transcript_cache(provider: str, video_id: str, data: Dict[str, Any]) -> None:
+def write_transcript_cache(
+    provider: str,
+    video_id: str,
+    data: Dict[str, Any],
+    language: str = "en",
+    kind: str = "transcript",
+) -> None:
     if not settings.transcript_cache_enabled:
         return
-    path = cache_path(provider, video_id)
+    path = cache_path(provider, video_id, language, kind)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     try:

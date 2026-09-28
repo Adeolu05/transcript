@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useTheme } from 'next-themes';
+import { useHydrated } from '../lib/useHydrated';
 
 interface NavbarProps {
     links: { label: string; href?: string; onClick?: () => void }[];
@@ -13,9 +14,7 @@ export function Navbar({ links, showThemeToggle = false }: NavbarProps) {
     const [scrolled, setScrolled] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const { theme, setTheme } = useTheme();
-    const [mounted, setMounted] = useState(false);
-
-    useEffect(() => setMounted(true), []);
+    const mounted = useHydrated();
 
     useEffect(() => {
         const onScroll = () => setScrolled(window.scrollY > 8);

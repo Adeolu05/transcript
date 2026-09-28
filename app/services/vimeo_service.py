@@ -1,15 +1,36 @@
 import requests
 import re
 import json
+import time
 import webvtt
 from io import StringIO
 from typing import List, Dict, Optional
 
 from app.core.errors import ErrorCode, TranscriptFetchError
+from app.core.languages import DEFAULT_LANGUAGE, languages_match
 
 _NO_CAPTIONS = "No captions are available for this Vimeo video."
+_REQUEST_TIMEOUT = 10
 
-def get_vimeo_transcript(video_id: str, url: str = '') -> Dict:
+
+def _timeout(deadline: Optional[float]) -> float:
+    """Per-request timeout, never past the caller's deadline (time.monotonic())."""
+    if deadline is None:
+        return _REQUEST_TIMEOUT
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TranscriptFetchError(
+            ErrorCode.UPSTREAM_TIMEOUT, "Transcript provider did not respond in time."
+        )
+    return min(_REQUEST_TIMEOUT, remaining)
+
+
+def get_vimeo_transcript(
+    video_id: str,
+    url: str = '',
+    deadline: Optional[float] = None,
+    target_language: str = DEFAULT_LANGUAGE,
+) -> Dict:
     """
     Fetches the transcript for a given Vimeo video ID.
     Extracts text tracks from Vimeo player config and parses VTT format.
@@ -27,7 +48,7 @@ def get_vimeo_transcript(video_id: str, url: str = '') -> Dict:
             'Accept-Language': 'en-US,en;q=0.9',
         }
         
-        response = requests.get(player_url, headers=headers, timeout=10)
+        response = requests.get(player_url, headers=headers, timeout=_timeout(deadline))
         response.raise_for_status()
         
         html_content = response.text
@@ -54,14 +75,12 @@ def get_vimeo_transcript(video_id: str, url: str = '') -> Dict:
         if not text_tracks or len(text_tracks) == 0:
             raise TranscriptFetchError(ErrorCode.TRANSCRIPT_NOT_AVAILABLE, _NO_CAPTIONS)
         
-        # Use the first available text track (preferably English)
-        selected_track = None
-        for track in text_tracks:
-            if track.get('lang') == 'en':
-                selected_track = track
-                break
-        
-        # If no English, use the first one
+        # Vimeo can't translate: prefer the requested language, then English, then any track
+        selected_track = next(
+            (t for t in text_tracks if languages_match(t.get('lang', ''), target_language)),
+            None,
+        ) or next((t for t in text_tracks if languages_match(t.get('lang', ''), 'en')), None)
+
         if not selected_track and len(text_tracks) > 0:
             selected_track = text_tracks[0]
             
@@ -75,7 +94,7 @@ def get_vimeo_transcript(video_id: str, url: str = '') -> Dict:
             raise TranscriptFetchError(ErrorCode.TRANSCRIPT_NOT_AVAILABLE, _NO_CAPTIONS)
         
         # Download the VTT file
-        vtt_response = requests.get(vtt_url, timeout=10)
+        vtt_response = requests.get(vtt_url, timeout=_timeout(deadline))
         vtt_response.raise_for_status()
         
         # Parse VTT content
@@ -88,6 +107,8 @@ def get_vimeo_transcript(video_id: str, url: str = '') -> Dict:
             "video_id": video_id,
             "title": title,
             "language": language,
+            "source_language": language,
+            "translated": False,
             "duration_seconds": duration,
             "segments": segments
         }
@@ -105,6 +126,10 @@ def get_vimeo_transcript(video_id: str, url: str = '') -> Dict:
             ) from e
         raise TranscriptFetchError(
             ErrorCode.TRANSCRIPT_NOT_AVAILABLE, "Vimeo did not return this video. Try again later."
+        ) from e
+    except requests.Timeout as e:
+        raise TranscriptFetchError(
+            ErrorCode.UPSTREAM_TIMEOUT, "Transcript provider did not respond in time."
         ) from e
     except requests.RequestException as e:
         raise TranscriptFetchError(

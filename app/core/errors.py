@@ -6,14 +6,20 @@ from fastapi.responses import JSONResponse
 
 class ErrorCode(str, Enum):
     INVALID_URL = "INVALID_URL"
+    UNSUPPORTED_LANGUAGE = "UNSUPPORTED_LANGUAGE"
     TRANSCRIPT_NOT_AVAILABLE = "TRANSCRIPT_NOT_AVAILABLE"
     VIDEO_TOO_LONG = "VIDEO_TOO_LONG"
     RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
     UPSTREAM_TIMEOUT = "UPSTREAM_TIMEOUT"
+    # YouTube refused this server's IP (proxy missing/exhausted) — our problem, not the user's
+    UPSTREAM_BLOCKED = "UPSTREAM_BLOCKED"
     FILE_NOT_FOUND = "FILE_NOT_FOUND"
     FILE_EXPIRED = "FILE_EXPIRED"
     CONVERT_FAILED = "CONVERT_FAILED"
     CONVERT_BUSY = "CONVERT_BUSY"
+    SUMMARY_UNAVAILABLE = "SUMMARY_UNAVAILABLE"
+    SUMMARY_TOO_LONG = "SUMMARY_TOO_LONG"
+    SUMMARY_FAILED = "SUMMARY_FAILED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -35,10 +41,19 @@ class TranscriptFetchError(Exception):
     failures by type instead of matching on message text.
     """
 
+    _STATUS = {
+        ErrorCode.UPSTREAM_BLOCKED: 503,
+        ErrorCode.UPSTREAM_TIMEOUT: 504,
+    }
+
     def __init__(self, code: ErrorCode, message: str):
         self.code = code
         self.message = message
         super().__init__(message)
+
+    @property
+    def status_code(self) -> int:
+        return self._STATUS.get(self.code, 400)
 
 
 def success_response(data: Dict[str, Any]) -> Dict[str, Any]:

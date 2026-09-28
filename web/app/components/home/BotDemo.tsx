@@ -23,7 +23,7 @@ export const BotDemo: React.FC = () => {
             { delay: 7500, msg: { id: 5, text: "Transcript ready:", sender: 'bot' as const, file: true } },
         ];
 
-        let timeouts: ReturnType<typeof setTimeout>[] = [];
+        const timeouts: ReturnType<typeof setTimeout>[] = [];
 
         const runSequence = () => {
             setMessages([]);
