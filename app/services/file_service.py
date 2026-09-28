@@ -1,7 +1,12 @@
 import html
+import json
+import re
 import time
+import unicodedata
 import uuid
 from pathlib import Path
+from typing import Any
+from urllib.parse import quote
 
 from docx import Document
 
@@ -26,6 +31,49 @@ def resolve_temp_dir() -> Path:
 TEMP_DIR = resolve_temp_dir()
 
 
+_UNSAFE_FILENAME_CHARS = re.compile(r'[\x00-\x1f\x7f<>:"/\\|?*]+')
+_MAX_FILENAME_STEM = 80
+
+
+def download_filename(title: str | None, extension: str) -> str:
+    """
+    Human filename for a download, e.g. "My Talk.pdf". Strips path separators,
+    control and reserved characters; falls back to "transcript".
+    """
+    stem = _UNSAFE_FILENAME_CHARS.sub(" ", title or "")
+    stem = " ".join(stem.split()).strip(" .")[:_MAX_FILENAME_STEM].rstrip(" .")
+    return f"{stem or 'transcript'}.{extension.lstrip('.')}"
+
+
+def content_disposition(filename: str) -> str:
+    """Attachment header with an ASCII fallback plus RFC 5987 UTF-8 name."""
+    ascii_name = (
+        unicodedata.normalize("NFKD", filename).encode("ascii", "ignore").decode("ascii")
+    )
+    ascii_name = ascii_name.replace('"', "").strip() or "transcript"
+    if "." not in ascii_name.lstrip("."):
+        ascii_name = f"transcript{Path(filename).suffix}"
+    return (
+        f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(filename, safe='')}"
+    )
+
+
+def write_sidecar(file_id: str, suffix: str, data: Any) -> None:
+    """JSON sidecar next to a generated file (never downloadable: see _validate_file_id)."""
+    (TEMP_DIR / f"{file_id}.{suffix}.json").write_text(
+        json.dumps(data, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def read_sidecar(file_id: str, suffix: str) -> Any | None:
+    path = TEMP_DIR / f"{file_id}.{suffix}.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 class FileGenerator:
     @staticmethod
     def _get_temp_filepath(extension: str) -> Path:
@@ -36,8 +84,8 @@ class FileGenerator:
         return TEMP_DIR / filename
 
     @staticmethod
-    def generate_txt(content: str) -> str:
-        filepath = FileGenerator._get_temp_filepath("txt")
+    def generate_txt(content: str, extension: str = "txt") -> str:
+        filepath = FileGenerator._get_temp_filepath(extension)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
         return str(filepath)
@@ -92,6 +140,8 @@ class FileGenerator:
             return FileGenerator.generate_docx(content)
         if file_format == "pdf":
             return FileGenerator.generate_pdf(content)
+        if file_format in ("srt", "vtt"):
+            return FileGenerator.generate_txt(content, file_format)
         return FileGenerator.generate_txt(content)
 
     @staticmethod

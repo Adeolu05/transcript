@@ -65,7 +65,7 @@ export const BentoGrid: React.FC = () => {
                     <Share2 className="w-8 h-8 text-pink-400 group-hover:scale-110 transition-transform" />
                     <div>
                         <h4 className="text-lg font-orbitron font-semibold text-white">Multi-Format</h4>
-                        <p className="text-xs text-gray-500 mt-2">TXT, PDF, DOCX, JSON. Your choice.</p>
+                        <p className="text-xs text-gray-500 mt-2">TXT, PDF, DOCX, SRT, VTT. Your choice.</p>
                     </div>
                 </div>
 

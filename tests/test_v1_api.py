@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app.core.errors import ErrorCode, TranscriptFetchError
 from app.main import app
 
 client = TestClient(app)
@@ -58,7 +59,9 @@ class TestV1Extract(unittest.TestCase):
 
     @patch("app.api.v1_routes.get_transcript_from_url")
     def test_extract_transcript_not_available(self, mock_fetch):
-        mock_fetch.side_effect = Exception("Transcripts are disabled for this video.")
+        mock_fetch.side_effect = TranscriptFetchError(
+            ErrorCode.TRANSCRIPT_NOT_AVAILABLE, "Transcripts are disabled for this video."
+        )
         r = client.post(
             "/api/v1/extract",
             json={
@@ -112,6 +115,43 @@ class TestV1Convert(unittest.TestCase):
         self.assertTrue(c["success"])
         self.assertIn("file_download_url", c)
         self.assertTrue(c["file_download_url"].startswith("/api/v1/download/"))
+
+    def _extract(self, mock_fetch) -> str:
+        mock_fetch.return_value = {**_TRANSCRIPT}
+        ex = client.post(
+            "/api/v1/extract",
+            json={"url": "https://www.youtube.com/watch?v=testvideo12", "include_timestamps": False},
+        )
+        self.assertEqual(ex.status_code, 200)
+        return ex.json()["file_id"]
+
+    @patch("app.api.v1_routes.get_transcript_from_url")
+    def test_convert_srt_and_vtt_download_with_title(self, mock_fetch):
+        file_id = self._extract(mock_fetch)
+        for fmt, first_line in (("srt", "1"), ("vtt", "WEBVTT")):
+            conv = client.post("/api/v1/convert", json={"file_id": file_id, "format": fmt})
+            self.assertEqual(conv.status_code, 200, conv.text)
+            dl = client.get(conv.json()["file_download_url"])
+            self.assertEqual(dl.status_code, 200)
+            self.assertEqual(dl.text.splitlines()[0], first_line)
+            self.assertIn("00:00:00", dl.text)
+            self.assertIn(
+                f'filename="Unit Test Video.{fmt}"', dl.headers["content-disposition"]
+            )
+
+    @patch("app.api.v1_routes.get_transcript_from_url")
+    def test_txt_download_named_after_title(self, mock_fetch):
+        file_id = self._extract(mock_fetch)
+        dl = client.get(f"/api/v1/download/{file_id}")
+        self.assertEqual(dl.status_code, 200)
+        self.assertIn('filename="Unit Test Video.txt"', dl.headers["content-disposition"])
+
+    @patch("app.api.v1_routes.get_transcript_from_url")
+    def test_download_rejects_json_sidecars(self, mock_fetch):
+        file_id = self._extract(mock_fetch)
+        for suffix in ("segments", "meta"):
+            r = client.get(f"/api/v1/download/{file_id}.{suffix}.json")
+            self.assertEqual(r.status_code, 400)
 
     def test_convert_rejects_bad_format(self):
         r = client.post(

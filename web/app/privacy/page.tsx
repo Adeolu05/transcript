@@ -35,7 +35,7 @@ export default function PrivacyPage() {
             </h2>
             <p className="mt-3">
               Transcript Flow lets you submit a public YouTube or Vimeo URL to generate a transcript
-              file (for example TXT, PDF, or DOCX). You do not need an account to use the web app.
+              file (for example TXT, PDF, DOCX, SRT, or VTT). You do not need an account to use the web app.
             </p>
           </section>
 

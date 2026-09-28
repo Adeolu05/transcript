@@ -5,6 +5,10 @@ import webvtt
 from io import StringIO
 from typing import List, Dict, Optional
 
+from app.core.errors import ErrorCode, TranscriptFetchError
+
+_NO_CAPTIONS = "No captions are available for this Vimeo video."
+
 def get_vimeo_transcript(video_id: str, url: str = '') -> Dict:
     """
     Fetches the transcript for a given Vimeo video ID.
@@ -42,13 +46,13 @@ def get_vimeo_transcript(video_id: str, url: str = '') -> Dict:
         match = re.search(config_pattern, html_content, re.DOTALL)
         
         if not match:
-            raise Exception("No text tracks found for this video")
+            raise TranscriptFetchError(ErrorCode.TRANSCRIPT_NOT_AVAILABLE, _NO_CAPTIONS)
         
         text_tracks_json = match.group(1)
         text_tracks = json.loads(text_tracks_json)
         
         if not text_tracks or len(text_tracks) == 0:
-            raise Exception("No transcripts available for this video")
+            raise TranscriptFetchError(ErrorCode.TRANSCRIPT_NOT_AVAILABLE, _NO_CAPTIONS)
         
         # Use the first available text track (preferably English)
         selected_track = None
@@ -62,13 +66,13 @@ def get_vimeo_transcript(video_id: str, url: str = '') -> Dict:
             selected_track = text_tracks[0]
             
         if not selected_track:
-             raise Exception("No usable text tracks available")
+            raise TranscriptFetchError(ErrorCode.TRANSCRIPT_NOT_AVAILABLE, _NO_CAPTIONS)
             
         language = selected_track.get('lang', 'en')
         vtt_url = selected_track.get('url')
         
         if not vtt_url:
-            raise Exception("No transcript URL found")
+            raise TranscriptFetchError(ErrorCode.TRANSCRIPT_NOT_AVAILABLE, _NO_CAPTIONS)
         
         # Download the VTT file
         vtt_response = requests.get(vtt_url, timeout=10)
@@ -88,16 +92,26 @@ def get_vimeo_transcript(video_id: str, url: str = '') -> Dict:
             "segments": segments
         }
         
+    except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else None
+        if status == 403:
+            raise TranscriptFetchError(
+                ErrorCode.TRANSCRIPT_NOT_AVAILABLE,
+                "This video is private or restricted. Only public Vimeo videos with captions are supported.",
+            ) from e
+        if status == 404:
+            raise TranscriptFetchError(
+                ErrorCode.TRANSCRIPT_NOT_AVAILABLE, "Video not found. Please check the URL."
+            ) from e
+        raise TranscriptFetchError(
+            ErrorCode.TRANSCRIPT_NOT_AVAILABLE, "Vimeo did not return this video. Try again later."
+        ) from e
     except requests.RequestException as e:
-        if "403" in str(e):
-            raise Exception("This video is private or restricted. Only public Vimeo videos with captions are supported.")
-        elif "404" in str(e):
-            raise Exception("Video not found. Please check the URL.")
-        raise Exception(f"Failed to fetch Vimeo video: {str(e)}")
+        raise TranscriptFetchError(
+            ErrorCode.TRANSCRIPT_NOT_AVAILABLE, "Could not reach Vimeo. Try again later."
+        ) from e
     except json.JSONDecodeError as e:
-        raise Exception(f"Failed to parse Vimeo text tracks: {str(e)}")
-    except Exception as e:
-        raise Exception(f"Error extracting Vimeo transcript: {str(e)}")
+        raise TranscriptFetchError(ErrorCode.TRANSCRIPT_NOT_AVAILABLE, _NO_CAPTIONS) from e
 
 def parse_vtt(vtt_content: str) -> List[Dict]:
     """
@@ -122,7 +136,9 @@ def parse_vtt(vtt_content: str) -> List[Dict]:
             })
     
     except Exception as e:
-        raise Exception(f"Failed to parse VTT content: {str(e)}")
+        raise TranscriptFetchError(
+            ErrorCode.TRANSCRIPT_NOT_AVAILABLE, "Vimeo captions could not be read."
+        ) from e
     
     return transcript
 

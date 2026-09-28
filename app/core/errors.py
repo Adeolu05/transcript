@@ -27,6 +27,20 @@ class AppError(Exception):
         super().__init__(message)
 
 
+class TranscriptFetchError(Exception):
+    """
+    Upstream transcript failure with a user-safe message.
+
+    Raised by the YouTube/Vimeo services so interfaces (API, Telegram) can map
+    failures by type instead of matching on message text.
+    """
+
+    def __init__(self, code: ErrorCode, message: str):
+        self.code = code
+        self.message = message
+        super().__init__(message)
+
+
 def success_response(data: Dict[str, Any]) -> Dict[str, Any]:
     """Wraps any payload in the standard success envelope."""
     return {"success": True, **data}
