@@ -12,7 +12,7 @@ Core Value: **Fast → Reliable → Structured → Downloadable.**
 - **Clean Formats**: Download as **TXT, PDF, and DOCX**, or **SRT / VTT** subtitles with cue timings. Files are named after the video title.
 - **Timestamps**: Toggle perfectly formatted timestamps on or off.
 - **Anonymous & Secure**: No accounts required. Generated files auto-delete after ~1 hour (TTL). Optional short-term caption cache (`TRANSCRIPT_CACHE_TTL_HOURS`) is pruned by the same cleanup loop.
-- **Rate Limited & Guardrailed**: Separate extract vs convert quotas, max video duration (with caption-based fallback), segment/size caps, and timeout protections.
+- **Rate Limited & Guardrailed**: Separate extract vs convert quotas (shared across workers and the bot via optional Redis), max video duration (with caption-based fallback), segment/size caps, and timeout protections.
 - **Telemetry & Analytics**: Built-in lightweight JSON-structured logging and analytics tracking.
 
 ## 🏗 System Architecture
@@ -54,7 +54,7 @@ A premium, modern SaaS web app interface designed with:
 ### 2. Telegram Bot (`app/bot/telegram_bot.py`)
 A seriously structured, minimal utility bot:
 - **Instant Processing**: Send a URL, get a file. No conversational fluff.
-- **In-Memory Preferences**: Remembers your preferred format (e.g., PDF) and timestamp setting while the bot process runs (reset on restart/deploy).
+- **Remembered Preferences**: Remembers your preferred format (e.g., PDF) and timestamp setting — in Redis when `REDIS_URL` is set (kept ~90 days), otherwise in memory until the bot restarts.
 - **Single Message UX**: Status updates (Extracting... $\rightarrow$ Formatting... $\rightarrow$ Ready) happen within a single edited message to keep chat history clean.
 - **Branded Onboarding**: Clean `/start` experience with inline keyboard routing.
 

@@ -1,15 +1,19 @@
 import time
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
+
+import redis
 
 from app.core.config import settings
+from app.core.redis_client import get_redis, warn_fallback
 
 
 class RateLimitService:
     """
-    In-memory sliding window counter keyed by (bucket, identifier).
+    Fixed-window counter keyed by (bucket, identifier).
 
-    Multi-worker note: each Gunicorn worker has its own store, so effective
-    limits can be up to ~N× the configured value under uniform load.
+    With REDIS_URL set, counts are shared by every Gunicorn worker and the
+    Telegram bot. Otherwise (or if Redis errors) each process keeps its own
+    in-memory store, so effective limits can be up to ~N× the configured value.
     """
 
     def __init__(self) -> None:
@@ -37,6 +41,10 @@ class RateLimitService:
             return True
 
         window_seconds = max(1, int(settings.rate_limit_window_seconds))
+        shared = self._redis_is_allowed(identifier, bucket, limit, window_seconds)
+        if shared is not None:
+            return shared
+
         now = time.time()
         self._cleanup(now)
 
@@ -56,6 +64,26 @@ class RateLimitService:
             return True
 
         return False
+
+    @staticmethod
+    def _redis_is_allowed(
+        identifier: str, bucket: str, limit: int, window_seconds: int
+    ) -> Optional[bool]:
+        """Shared count via Redis; None means use the in-memory fallback."""
+        client = get_redis()
+        if client is None:
+            return None
+        key = f"tf:rl:{bucket}:{identifier}"
+        try:
+            # SET NX starts the window with its TTL; INCR counts this request
+            pipe = client.pipeline(transaction=True)
+            pipe.set(key, 0, ex=window_seconds, nx=True)
+            pipe.incr(key)
+            _, count = pipe.execute()
+        except redis.RedisError as e:
+            warn_fallback("rate limit", e)
+            return None
+        return int(count) <= limit
 
     def _cleanup(self, now: float) -> None:
         expired = [k for k, v in self._store.items() if now > v[1]]

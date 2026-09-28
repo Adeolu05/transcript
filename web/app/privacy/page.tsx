@@ -69,7 +69,7 @@ export default function PrivacyPage() {
             </h2>
             <p className="mt-3">
               To improve reliability and reduce load on third-party caption sources, we may cache
-              caption/transcript data for a video for a limited period (on the order of hours, not
+              caption/transcript data for a video for a limited period (up to a few days, not
               permanent archives). This cache is operational, not a personal library or account
               history. It is separate from the short-lived download files described above.
             </p>
@@ -84,6 +84,23 @@ export default function PrivacyPage() {
               prevention (for example approximate timing, error codes, and rate-limit signals). We aim
               to avoid storing unnecessary detail. Internal dashboards may show aggregated usage
               metrics, not a permanent copy of your full transcript text, for operations.
+            </p>
+            <p className="mt-3">
+              To enforce fair-use limits we count requests per IP address (or per Telegram user) for
+              the length of the limit window, typically 24 hours. Logs record IP addresses and
+              Telegram user IDs only as keyed one-way hashes, and record the public video ID rather
+              than the full link you submitted.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="text-base font-semibold tracking-tight" style={{ color: "var(--text)" }}>
+              Telegram preferences
+            </h2>
+            <p className="mt-3">
+              The Telegram bot remembers your preferred file format and timestamp setting, keyed to
+              your Telegram user ID, so you do not have to choose them each time. This is forgotten
+              after about 90 days without use.
             </p>
           </section>
 
