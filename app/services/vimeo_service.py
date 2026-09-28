@@ -7,6 +7,7 @@ from io import StringIO
 from typing import List, Dict, Optional
 
 from app.core.errors import ErrorCode, TranscriptFetchError
+from app.core.languages import DEFAULT_LANGUAGE, languages_match
 
 _NO_CAPTIONS = "No captions are available for this Vimeo video."
 _REQUEST_TIMEOUT = 10
@@ -24,7 +25,12 @@ def _timeout(deadline: Optional[float]) -> float:
     return min(_REQUEST_TIMEOUT, remaining)
 
 
-def get_vimeo_transcript(video_id: str, url: str = '', deadline: Optional[float] = None) -> Dict:
+def get_vimeo_transcript(
+    video_id: str,
+    url: str = '',
+    deadline: Optional[float] = None,
+    target_language: str = DEFAULT_LANGUAGE,
+) -> Dict:
     """
     Fetches the transcript for a given Vimeo video ID.
     Extracts text tracks from Vimeo player config and parses VTT format.
@@ -69,14 +75,12 @@ def get_vimeo_transcript(video_id: str, url: str = '', deadline: Optional[float]
         if not text_tracks or len(text_tracks) == 0:
             raise TranscriptFetchError(ErrorCode.TRANSCRIPT_NOT_AVAILABLE, _NO_CAPTIONS)
         
-        # Use the first available text track (preferably English)
-        selected_track = None
-        for track in text_tracks:
-            if track.get('lang') == 'en':
-                selected_track = track
-                break
-        
-        # If no English, use the first one
+        # Vimeo can't translate: prefer the requested language, then English, then any track
+        selected_track = next(
+            (t for t in text_tracks if languages_match(t.get('lang', ''), target_language)),
+            None,
+        ) or next((t for t in text_tracks if languages_match(t.get('lang', ''), 'en')), None)
+
         if not selected_track and len(text_tracks) > 0:
             selected_track = text_tracks[0]
             
@@ -103,6 +107,8 @@ def get_vimeo_transcript(video_id: str, url: str = '', deadline: Optional[float]
             "video_id": video_id,
             "title": title,
             "language": language,
+            "source_language": language,
+            "translated": False,
             "duration_seconds": duration,
             "segments": segments
         }

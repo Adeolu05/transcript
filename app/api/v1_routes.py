@@ -16,6 +16,13 @@ from app.core.dependencies import (
     verify_rate_limit_extract,
 )
 from app.core.errors import AppError, ErrorCode, TranscriptFetchError, success_response
+from app.core.languages import (
+    DEFAULT_LANGUAGE,
+    LANGUAGE_CODES,
+    language_name,
+    languages_match,
+    public_language_list,
+)
 from app.services.analytics_service import AnalyticsService
 from app.services.extract_guardrails import enforce_transcript_guardrails
 from app.services.file_service import (
@@ -27,6 +34,7 @@ from app.services.file_service import (
     write_sidecar,
 )
 from app.services.formatter_service import SUBTITLE_FORMATS, TranscriptFormatter
+from app.services.pdf_fonts import UnsupportedPdfScript, pdf_supported
 from app.services.metadata_service import MetadataService
 from app.services.telemetry_service import MAX_PAYLOAD_BYTES, TelemetryService
 from app.services.transcript_service import get_transcript_from_url
@@ -68,6 +76,8 @@ def _validate_file_id(file_id: str) -> str:
 class ExtractRequest(BaseModel):
     url: str = Field(..., min_length=20, max_length=2048)
     include_timestamps: bool = False
+    # Target caption language (see app.core.languages); YouTube auto-translates
+    language: str = DEFAULT_LANGUAGE
 
 
 @router.get("/health")
@@ -88,13 +98,18 @@ async def extract_transcript(request: ExtractRequest):
             400,
         )
 
+    if request.language not in LANGUAGE_CODES:
+        raise AppError(ErrorCode.UNSUPPORTED_LANGUAGE, "That language isn't supported.", 400)
+
     layout_format = "timestamp" if request.include_timestamps else "clean"
 
     # The worker thread outlives wait_for; the deadline makes it stop calling upstream too
     deadline = time.monotonic() + settings.transcript_timeout_seconds
     try:
         transcript_data = await asyncio.wait_for(
-            asyncio.to_thread(get_transcript_from_url, request.url, deadline),
+            asyncio.to_thread(
+                get_transcript_from_url, request.url, deadline, request.language
+            ),
             timeout=settings.transcript_timeout_seconds,
         )
     except asyncio.TimeoutError:
@@ -205,7 +220,12 @@ async def extract_transcript(request: ExtractRequest):
     text_sidecar.write_text(formatted_text, encoding="utf-8")
     # Segments feed SRT/VTT convert; title names every download of this transcript
     await asyncio.to_thread(write_sidecar, filename, "segments", transcript_data["segments"])
-    write_sidecar(filename, "meta", {"title": transcript_data.get("title")})
+    out_language = transcript_data.get("language", DEFAULT_LANGUAGE)
+    # Language picks the CJK PDF font (zh-Hant vs zh-Hans) at convert time
+    write_sidecar(filename, "meta", {"title": transcript_data.get("title"), "language": out_language})
+    can_pdf = await asyncio.to_thread(pdf_supported, formatted_text)
+    source_language = transcript_data.get("source_language") or out_language
+    translated = bool(transcript_data.get("translated"))
 
     MetadataService.log_success(
         video_id=transcript_data["video_id"],
@@ -235,7 +255,16 @@ async def extract_transcript(request: ExtractRequest):
             "provider": transcript_data.get("provider", platform),
             "video_id": transcript_data["video_id"],
             "title": transcript_data["title"],
-            "language": transcript_data.get("language", "en"),
+            "language": out_language,
+            "language_name": language_name(out_language),
+            "requested_language": request.language,
+            "source_language": source_language,
+            "source_language_name": language_name(source_language),
+            "translated": translated,
+            # Neither a native track nor a translation: captions are in another language
+            "language_fallback": not translated
+            and not languages_match(out_language, request.language),
+            "pdf_supported": can_pdf,
             "duration_seconds": duration,
             "word_count": metrics["word_count"],
             "reading_time_seconds": metrics["reading_time_seconds"],
@@ -330,8 +359,13 @@ async def convert_file(request: ConvertRequest):
     try:
         try:
             file_path = await asyncio.to_thread(
-                FileGenerator.generate_file, content, request.format
+                FileGenerator.generate_file,
+                content,
+                request.format,
+                (read_sidecar(request.file_id, "meta") or {}).get("language", ""),
             )
+        except UnsupportedPdfScript as e:
+            raise AppError(ErrorCode.CONVERT_FAILED, str(e), 400)
         except Exception as e:
             logger.error("Convert generation failed: %s", e)
             raise AppError(
@@ -359,6 +393,8 @@ async def get_public_config():
     return success_response(
         {
             "file_ttl_hours": settings.file_ttl_hours,
+            "default_language": DEFAULT_LANGUAGE,
+            "languages": public_language_list(),
         }
     )
 

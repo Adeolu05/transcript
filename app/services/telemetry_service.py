@@ -33,6 +33,7 @@ ALLOWED_EVENTS = {
     "download_succeeded",
     "download_failed",
     "new_transcript_clicked",
+    "language_changed",
     # Telegram
     "tg_link_received",
     "tg_extract_succeeded",
@@ -48,6 +49,8 @@ ALLOWED_EVENTS = {
     "tg_cmd_privacy",
     "tg_cmd_status",
     "tg_sample_clicked",
+    "tg_cmd_language",
+    "tg_language_set",
 }
 
 # Props keys we accept (everything else is stripped)
@@ -57,6 +60,8 @@ ALLOWED_PROPS = {
     "include_timestamps",
     "duration_seconds_bucket",
     "error_code",
+    "language",
+    "translated",
 }
 
 # Maximum payload size (bytes) — reject anything larger

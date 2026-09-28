@@ -141,17 +141,23 @@ class TestTelegramPrefs(unittest.TestCase):
     def test_roundtrip_through_redis_survives_process_memory_loss(self):
         fake = FakeRedis()
         with patch.object(prefs, "get_redis", return_value=fake):
-            prefs.set_prefs("42", last_file_format="srt", last_include_timestamps=True)
+            prefs.set_prefs(
+                "42", last_file_format="srt", last_include_timestamps=True, language="ja"
+            )
             prefs._memory.clear()  # simulate a restart
             self.assertEqual(
                 prefs.get_prefs("42"),
-                {"last_file_format": "srt", "last_include_timestamps": True},
+                {"last_file_format": "srt", "last_include_timestamps": True, "language": "ja"},
             )
         self.assertEqual(fake.ttl["tf:tgprefs:42"], prefs.settings.telegram_prefs_ttl_days * 86400)
 
     def test_invalid_stored_values_ignored(self):
         fake = FakeRedis()
-        fake.data["tf:tgprefs:7"] = {"last_file_format": "exe", "last_include_timestamps": "yes"}
+        fake.data["tf:tgprefs:7"] = {
+            "last_file_format": "exe",
+            "last_include_timestamps": "yes",
+            "language": "klingon",
+        }
         with patch.object(prefs, "get_redis", return_value=fake):
             self.assertEqual(prefs.get_prefs("7"), prefs.DEFAULTS)
 

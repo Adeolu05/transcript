@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     in_process_cleanup_enabled: bool = True
     cleanup_interval_seconds: int = 900  # 15 minutes
 
+    # TTF used for PDFs whose text is beyond Helvetica's Western European set
+    # (Polish, Vietnamese, Cyrillic, Greek...). Empty = search common system paths.
+    pdf_font_path: str = ""
+
     # Telegram bot preview length
     preview_chars: int = 1500
 

@@ -28,9 +28,15 @@ from app.services.transcript_cache_service import (
 )
 from app.core.config import settings
 from app.core.errors import ErrorCode, TranscriptFetchError
+from app.core.languages import (
+    DEFAULT_LANGUAGE,
+    is_traditional_chinese,
+    lang_base,
+    languages_match,
+)
 
 # User-facing when YouTube IpBlocked / RequestBlocked (cloud IPs are often banned).
-YOUTUBE_TRANSCRIPT_UNAVAILABLE_EN_ONLY = (
+YOUTUBE_BLOCKED_MESSAGE = (
     "We could not load captions because YouTube blocked this server. "
     "Please try again later."
 )
@@ -166,9 +172,13 @@ def _youtube_api(deadline: Optional[float] = None) -> YouTubeTranscriptApi:
     return YouTubeTranscriptApi(proxy_config=proxy_config, http_client=http_client)
 
 
-def get_transcript_from_url(url: str, deadline: Optional[float] = None) -> Dict:
+def get_transcript_from_url(
+    url: str, deadline: Optional[float] = None, language: str = DEFAULT_LANGUAGE
+) -> Dict:
     """
-    Fetch transcript. YouTube captions are always resolved to English (native or auto-translate).
+    Fetch captions in *language*: YouTube uses a native track or auto-translates;
+    Vimeo picks the matching uploaded track. Either may fall back to the original
+    captions; the result's "language" says what was actually returned.
     Raises TranscriptFetchError for expected failures; anything else is a bug.
     *deadline* (time.monotonic()) bounds upstream work so it stops once the caller gives up.
     """
@@ -180,7 +190,7 @@ def get_transcript_from_url(url: str, deadline: Optional[float] = None) -> Dict:
     except ValueError as e:
         raise TranscriptFetchError(ErrorCode.INVALID_URL, str(e)) from e
 
-    cached = read_transcript_cache(platform, video_id)
+    cached = read_transcript_cache(platform, video_id, language)
     if cached is not None:
         out = dict(cached)
         if url:
@@ -188,10 +198,14 @@ def get_transcript_from_url(url: str, deadline: Optional[float] = None) -> Dict:
         return out
 
     if platform == "youtube":
-        result = get_youtube_transcript(video_id, url=url, deadline=deadline)
+        result = get_youtube_transcript(
+            video_id, url=url, deadline=deadline, target_language=language
+        )
     else:
-        result = get_vimeo_transcript(video_id, url=url, deadline=deadline)
-    write_transcript_cache(platform, video_id, result)
+        result = get_vimeo_transcript(
+            video_id, url=url, deadline=deadline, target_language=language
+        )
+    write_transcript_cache(platform, video_id, result, language)
     return result
 
 
@@ -229,8 +243,13 @@ def _language_priority_tuple() -> Tuple[str, ...]:
     return tuple(merged)
 
 
-def _norm_lang_base(code: str) -> str:
-    return (code or "").strip().split("-")[0].lower()
+def _target_aliases(target: str) -> Tuple[str, ...]:
+    """Caption codes YouTube may use for a native track in *target*."""
+    if is_traditional_chinese(target):
+        return ("zh-Hant", "zh-TW", "zh-HK")
+    if lang_base(target) == "zh":
+        return ("zh-Hans", "zh-CN", "zh")
+    return (target, lang_base(target))
 
 
 def _select_transcript_for_priority(
@@ -245,44 +264,36 @@ def _select_transcript_for_priority(
         raise NoTranscriptFound(tlist.video_id, list(cleaned), tlist) from None
 
 
-def _translation_api_code_for_target(tr: Transcript, target_base: str) -> Optional[str]:
-    """Exact language_code to pass to translate(), matching YouTube’s list."""
-    if not tr.is_translatable or not target_base:
+def _translation_api_code_for_target(tr: Transcript, target: str) -> Optional[str]:
+    """Exact language_code to pass to translate(), matching YouTube's list."""
+    if not tr.is_translatable or not target:
         return None
-    for tl in tr.translation_languages:
-        if _norm_lang_base(tl.language_code) == target_base:
-            return tl.language_code
-    return None
+    codes = [tl.language_code for tl in tr.translation_languages]
+    exact = next((c for c in codes if c.lower() == target.lower()), None)
+    return exact or next((c for c in codes if languages_match(c, target)), None)
 
 
-def _fetch_for_target_language(tr: Transcript, target_language: str) -> Tuple[Any, str]:
+def _fetch_for_target_language(tr: Transcript, target_language: str) -> Tuple[Any, str, bool]:
     """
-    Return (fetched_transcript, language_code). Prefer native track in *target_language*,
-    else YouTube translate(), else original captions.
+    Return (fetched_transcript, language_code, translated). Prefer native track in
+    *target_language*, else YouTube translate(), else original captions.
     """
-    tgt = _norm_lang_base(target_language)
-    src = _norm_lang_base(tr.language_code)
-    if tgt and src == tgt:
+    if languages_match(tr.language_code, target_language):
         fetched = tr.fetch()
-        return fetched, fetched.language_code
+        return fetched, fetched.language_code, False
 
-    api_code = _translation_api_code_for_target(tr, tgt) if tgt else None
+    api_code = _translation_api_code_for_target(tr, target_language)
     if api_code:
         try:
             fetched = tr.translate(api_code).fetch()
-            return fetched, fetched.language_code
-        except (TranslationLanguageNotAvailable, NotTranslatable, Exception):
-            pass
-
-    if tgt:
-        try:
-            fetched = tr.translate(target_language).fetch()
-            return fetched, fetched.language_code
+            return fetched, fetched.language_code, True
         except (TranslationLanguageNotAvailable, NotTranslatable):
+            # Only "can't translate" falls back. Blocks/timeouts must surface: a silent
+            # fallback would be mislabelled "not available" and cached for days.
             pass
 
     fetched = tr.fetch()
-    return fetched, fetched.language_code
+    return fetched, fetched.language_code, False
 
 
 def _youtube_transcript_fresh_core(
@@ -291,27 +302,23 @@ def _youtube_transcript_fresh_core(
     url: str,
     metadata_future: Optional[Future] = None,
     deadline: Optional[float] = None,
+    target_language: str = DEFAULT_LANGUAGE,
 ) -> Dict:
     if metadata_future is None:
         metadata_future = _metadata_pool.submit(_get_youtube_metadata, video_id)
     api = _youtube_api(deadline)
     tlist = api.list(video_id)
 
-    target = "en"
-
+    translated = False
     if languages is not None:
         transcript = tlist.find_transcript(tuple(languages))
         fetched = transcript.fetch()
         out_lang = fetched.language_code
     else:
-        priority = tuple(
-            dict.fromkeys(
-                [target, _norm_lang_base(target), *list(_language_priority_tuple())]
-            )
-        )
-        priority = tuple(p for p in priority if p)
+        # Native track in the target first; otherwise the best source to translate from
+        priority = (*_target_aliases(target_language), *_language_priority_tuple())
         transcript = _select_transcript_for_priority(tlist, priority)
-        fetched, out_lang = _fetch_for_target_language(transcript, target)
+        fetched, out_lang, translated = _fetch_for_target_language(transcript, target_language)
 
     segments = [
         {"text": item.text, "start": item.start, "duration": item.duration}
@@ -325,6 +332,8 @@ def _youtube_transcript_fresh_core(
         "video_id": video_id,
         "title": metadata["title"],
         "language": out_lang,
+        "source_language": transcript.language_code,
+        "translated": translated,
         "duration_seconds": metadata["duration"],
         "segments": segments,
     }
@@ -335,7 +344,7 @@ def _youtube_fetch_error(e: CouldNotRetrieveTranscript) -> TranscriptFetchError:
     na = ErrorCode.TRANSCRIPT_NOT_AVAILABLE
     if isinstance(e, (IpBlocked, RequestBlocked)):
         return TranscriptFetchError(
-            ErrorCode.UPSTREAM_BLOCKED, YOUTUBE_TRANSCRIPT_UNAVAILABLE_EN_ONLY
+            ErrorCode.UPSTREAM_BLOCKED, YOUTUBE_BLOCKED_MESSAGE
         )
     if isinstance(e, TranscriptsDisabled):
         return TranscriptFetchError(na, "Transcripts are disabled for this video.")
@@ -354,10 +363,11 @@ def get_youtube_transcript(
     languages: Optional[List[str]] = None,
     url: str = "",
     deadline: Optional[float] = None,
+    target_language: str = DEFAULT_LANGUAGE,
 ) -> Dict:
     """
     list() + find_transcript; never uses fetch(video_id) default ['en'] shortcut.
-    English-only: prefer English captions, else translate to English when available.
+    Prefers a native track in *target_language*, else YouTube auto-translation.
     With residential proxy configured, retries a few times on IpBlocked / RequestBlocked,
     but never sleeps past *deadline*.
     """
@@ -367,7 +377,12 @@ def get_youtube_transcript(
     for attempt in range(attempts):
         try:
             return _youtube_transcript_fresh_core(
-                video_id, languages, url, metadata_future=metadata_future, deadline=deadline
+                video_id,
+                languages,
+                url,
+                metadata_future=metadata_future,
+                deadline=deadline,
+                target_language=target_language,
             )
         except (IpBlocked, RequestBlocked) as e:
             delay = settings.youtube_transcript_retry_backoff_seconds * (attempt + 1)
