@@ -12,6 +12,12 @@ interface SuccessData {
     video_id: string;
     title: string;
     language: string;
+    language_name: string;
+    requested_language: string;
+    source_language_name: string;
+    translated: boolean;
+    language_fallback: boolean;
+    pdf_supported: boolean;
     duration_seconds: number;
     word_count: number;
     reading_time_seconds: number;
@@ -27,6 +33,33 @@ interface ErrorData {
 }
 
 type DownloadFormat = 'txt' | 'pdf' | 'docx' | 'srt' | 'vtt';
+
+interface Language {
+    code: string;
+    name: string;
+    english_name: string;
+}
+
+// Used until /config answers (or if it fails)
+const FALLBACK_LANGUAGES: Language[] = [{ code: 'en', name: 'English', english_name: 'English' }];
+const LANGUAGE_KEY = 'tf_language';
+
+// Per-viewer convenience only; storage can be unavailable (private mode, blocked site data)
+function readStoredLanguage(): string | null {
+    try {
+        return localStorage.getItem(LANGUAGE_KEY);
+    } catch {
+        return null;
+    }
+}
+
+function storeLanguage(code: string) {
+    try {
+        localStorage.setItem(LANGUAGE_KEY, code);
+    } catch {
+        /* ignore */
+    }
+}
 
 // TXT is the primary action; the rest go through /convert.
 const SECONDARY_FORMATS: { format: DownloadFormat; label: string }[] = [
@@ -62,6 +95,8 @@ export function TranscribeClient() {
     const [downloading, setDownloading] = useState<string | null>(null);
     const [convertError, setConvertError] = useState<string | null>(null);
     const [fileTtlHours, setFileTtlHours] = useState<number>(1);
+    const [languages, setLanguages] = useState<Language[]>(FALLBACK_LANGUAGES);
+    const [language, setLanguage] = useState('en');
     const resultRef = useRef<HTMLDivElement>(null);
 
     const API_BASE = PUBLIC_API_BASE;
@@ -72,14 +107,29 @@ export function TranscribeClient() {
         }
     }, [state]);
 
-    // Fetch public config (file TTL) on mount
+    // Fetch public config (file TTL, languages) on mount
     useEffect(() => {
         trackEvent('app_opened');
         fetch(`${API_BASE}/api/v1/config`)
             .then(r => r.json())
-            .then(d => { if (d.success && d.file_ttl_hours) setFileTtlHours(d.file_ttl_hours); })
+            .then(d => {
+                if (!d.success) return;
+                if (d.file_ttl_hours) setFileTtlHours(d.file_ttl_hours);
+                if (Array.isArray(d.languages) && d.languages.length) {
+                    const list = d.languages as Language[];
+                    setLanguages(list);
+                    const stored = readStoredLanguage();
+                    if (stored && list.some(l => l.code === stored)) setLanguage(stored);
+                }
+            })
             .catch(() => { });
     }, [API_BASE]);
+
+    const handleLanguageChange = (code: string) => {
+        setLanguage(code);
+        storeLanguage(code);
+        trackEvent('language_changed', { language: code });
+    };
 
     const handleGenerate = async () => {
         if (!url.trim()) return;
@@ -87,7 +137,7 @@ export function TranscribeClient() {
         setStep(0);
         setSuccess(null);
         setError(null);
-        trackEvent('extract_clicked', { include_timestamps: timestamps });
+        trackEvent('extract_clicked', { include_timestamps: timestamps, language });
 
         const stepTimer = setInterval(() => {
             setStep(prev => (prev < 2 ? prev + 1 : prev));
@@ -100,6 +150,7 @@ export function TranscribeClient() {
                 body: JSON.stringify({
                     url: url.trim(),
                     include_timestamps: timestamps,
+                    language,
                 }),
             });
 
@@ -112,6 +163,8 @@ export function TranscribeClient() {
                     provider: data.provider,
                     duration_seconds_bucket: data.duration_seconds <= 600 ? '0-600' : data.duration_seconds <= 1800 ? '600-1800' : data.duration_seconds <= 3600 ? '1800-3600' : '3600+',
                     include_timestamps: timestamps,
+                    language: data.language,
+                    translated: Boolean(data.translated),
                 });
                 setTimeout(() => {
                     setSuccess(data as SuccessData);
@@ -163,7 +216,7 @@ export function TranscribeClient() {
                 trackEvent('download_succeeded', { file_format: format });
             } else {
                 const fmt = format.toUpperCase();
-                setConvertError(`Could not generate ${fmt}. Try TXT or retry.`);
+                setConvertError(data.error?.message ?? `Could not generate ${fmt}. Try TXT or retry.`);
                 trackEvent('download_failed', { file_format: format, error_code: data.error?.code ?? 'CONVERT_FAILED' });
             }
         } catch {
@@ -239,9 +292,29 @@ export function TranscribeClient() {
                     </div>
                 </div>
 
-                <p className="text-xs font-medium -mt-4 mb-8" style={{ color: 'var(--muted)' }}>
-                    YouTube transcripts are English-only for now.
-                </p>
+                {/* Language */}
+                <div className="-mt-4 mb-8 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+                    <label htmlFor="transcript-language" className="text-[10px] font-bold tracking-[0.3em] uppercase" style={{ color: 'var(--muted)' }}>
+                        Transcript language
+                    </label>
+                    <select
+                        id="transcript-language"
+                        value={language}
+                        onChange={e => handleLanguageChange(e.target.value)}
+                        disabled={isProcessing}
+                        className="bg-transparent py-1 pr-2 text-sm font-medium focus:outline-none cursor-pointer disabled:opacity-50"
+                        style={{ color: 'var(--text)', borderBottom: '1px solid var(--border)' }}
+                    >
+                        {languages.map(l => (
+                            <option key={l.code} value={l.code} style={{ background: 'var(--surface)', color: 'var(--text)' }}>
+                                {l.name === l.english_name ? l.name : `${l.name} · ${l.english_name}`}
+                            </option>
+                        ))}
+                    </select>
+                    <p className="text-xs font-medium" style={{ color: 'var(--muted)' }}>
+                        YouTube auto-translates when a video has no captions in this language.
+                    </p>
+                </div>
 
                 {/* Generate / Extracting button */}
                 <button
@@ -309,6 +382,7 @@ export function TranscribeClient() {
     if (state === 'success' && success) {
         const chips = [
             { label: 'Title', value: success.title },
+            { label: 'Language', value: success.language_name },
             { label: 'Duration', value: fmtDuration(success.duration_seconds) },
             { label: 'Words', value: success.word_count.toLocaleString() },
             { label: 'Read time', value: fmtReading(success.reading_time_seconds) },
@@ -336,6 +410,15 @@ export function TranscribeClient() {
                             </div>
                         ))}
                     </div>
+
+                    {/* What language actually came back */}
+                    {(success.translated || success.language_fallback) && (
+                        <p className="px-8 md:px-12 pb-6 -mt-2 text-xs font-medium" style={{ color: 'var(--muted)' }}>
+                            {success.translated
+                                ? `Auto-translated by YouTube from ${success.source_language_name}. Machine translation can contain mistakes.`
+                                : `${languages.find(l => l.code === success.requested_language)?.name ?? success.requested_language} captions weren't available for this video, so this transcript is in ${success.language_name}.`}
+                        </p>
+                    )}
                 </div>
 
                 {/* Preview block */}
@@ -345,6 +428,7 @@ export function TranscribeClient() {
                         <p className="text-[10px] font-bold tracking-[0.4em] uppercase" style={{ color: 'var(--muted)' }}>Preview (truncated)</p>
                     </div>
                     <div
+                        dir="auto"
                         className="px-6 py-6 overflow-y-auto text-sm leading-relaxed whitespace-pre-wrap"
                         style={{
                             maxHeight: '360px',
@@ -378,7 +462,8 @@ export function TranscribeClient() {
                         <button
                             key={format}
                             onClick={() => handleDownload(format)}
-                            disabled={downloading !== null}
+                            disabled={downloading !== null || (format === 'pdf' && !success.pdf_supported)}
+                            title={format === 'pdf' && !success.pdf_supported ? "PDF isn't available for this language yet. Use DOCX or TXT." : undefined}
                             className="inline-flex items-center gap-3 px-8 py-4 font-bold text-[10px] uppercase tracking-widest transition-all rounded-full active:scale-[0.97] cursor-pointer disabled:opacity-40"
                             style={{ color: 'var(--text)', border: '1px solid var(--border)', background: 'transparent' }}
                         >
@@ -396,6 +481,12 @@ export function TranscribeClient() {
                         <ChevronRight className="w-3 h-3 transition-transform group-hover:translate-x-1" />
                     </button>
                 </div>
+
+                {!success.pdf_supported && (
+                    <p className="text-xs font-medium" style={{ color: 'var(--muted)' }}>
+                        PDF isn&apos;t available for this language yet. DOCX, TXT, SRT and VTT work normally.
+                    </p>
+                )}
 
                 {/* Convert error message */}
                 {convertError && (

@@ -1,13 +1,12 @@
 'use client';
 
 import { useTheme } from 'next-themes';
-import { useEffect, useState } from 'react';
+import { useHydrated } from '../lib/useHydrated';
 
 export function ThemeToggle() {
     const { theme, setTheme } = useTheme();
-    const [mounted, setMounted] = useState(false);
+    const mounted = useHydrated();
 
-    useEffect(() => setMounted(true), []);
     if (!mounted) return <span className="w-16" />;
 
     const isDark = theme === 'dark';
