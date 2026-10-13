@@ -87,6 +87,11 @@ async def verify_rate_limit_download(request: Request):
     _raise_if_limited(_extract_client_ip(request), "download")
 
 
+def check_summarize_quota(request: Request) -> None:
+    """Called only on a summary cache miss, so cached summaries never burn quota."""
+    _raise_if_limited(_extract_client_ip(request), "summarize")
+
+
 # Back-compat alias used in older call sites / tests
 async def verify_rate_limit(request: Request):
     await verify_rate_limit_extract(request)

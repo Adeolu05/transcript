@@ -37,6 +37,11 @@ services:
         sync: false
       - key: LOG_HASH_SECRET
         generateValue: true
+      # AI summaries: unset = feature hidden
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: RATE_LIMIT_SUMMARIZE_REQUESTS
+        value: "3"
       - key: MAX_VIDEO_DURATION_SECONDS
         value: "10800"
       - key: TRANSCRIPT_TIMEOUT_SECONDS

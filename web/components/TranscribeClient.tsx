@@ -27,6 +27,12 @@ interface SuccessData {
     expires_at: string;
 }
 
+interface Summary {
+    tldr: string;
+    key_points: string[];
+    chapters: { start_seconds: number; title: string }[];
+}
+
 interface ErrorData {
     code: string;
     message: string;
@@ -80,6 +86,13 @@ function fmtDuration(s: number) {
     return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
 
+function fmtTimestamp(total: number) {
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = String(total % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
 function fmtReading(s: number) {
     const m = Math.round(s / 60);
     return m <= 1 ? '<1 min' : `${m} min`;
@@ -97,6 +110,10 @@ export function TranscribeClient() {
     const [fileTtlHours, setFileTtlHours] = useState<number>(1);
     const [languages, setLanguages] = useState<Language[]>(FALLBACK_LANGUAGES);
     const [language, setLanguage] = useState('en');
+    const [summariesEnabled, setSummariesEnabled] = useState(false);
+    const [summary, setSummary] = useState<Summary | null>(null);
+    const [summaryLoading, setSummaryLoading] = useState(false);
+    const [summaryError, setSummaryError] = useState<string | null>(null);
     const resultRef = useRef<HTMLDivElement>(null);
 
     const API_BASE = PUBLIC_API_BASE;
@@ -115,6 +132,7 @@ export function TranscribeClient() {
             .then(d => {
                 if (!d.success) return;
                 if (d.file_ttl_hours) setFileTtlHours(d.file_ttl_hours);
+                setSummariesEnabled(Boolean(d.summaries_enabled));
                 if (Array.isArray(d.languages) && d.languages.length) {
                     const list = d.languages as Language[];
                     setLanguages(list);
@@ -137,6 +155,8 @@ export function TranscribeClient() {
         setStep(0);
         setSuccess(null);
         setError(null);
+        setSummary(null);
+        setSummaryError(null);
         trackEvent('extract_clicked', { include_timestamps: timestamps, language });
 
         const stepTimer = setInterval(() => {
@@ -228,7 +248,36 @@ export function TranscribeClient() {
         }
     };
 
+    const handleSummarize = async () => {
+        if (!success) return;
+        setSummaryLoading(true);
+        setSummaryError(null);
+        trackEvent('summary_clicked', { language: success.language });
+        try {
+            const res = await fetch(`${API_BASE}/api/v1/summarize`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_id: success.file_id }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                setSummary({ tldr: data.tldr, key_points: data.key_points, chapters: data.chapters });
+                trackEvent('summary_succeeded', { cached: Boolean(data.cached) });
+            } else {
+                setSummaryError(data.error?.message ?? 'Could not generate a summary. Try again later.');
+                trackEvent('summary_failed', { error_code: data.error?.code ?? 'UNKNOWN_ERROR' });
+            }
+        } catch {
+            setSummaryError('Could not reach the server. Check your connection and try again.');
+            trackEvent('summary_failed', { error_code: 'NETWORK_ERROR' });
+        } finally {
+            setSummaryLoading(false);
+        }
+    };
+
     const handleReset = () => {
+        setSummary(null);
+        setSummaryError(null);
         setState('idle');
         setUrl('');
         setSuccess(null);
@@ -445,6 +494,64 @@ export function TranscribeClient() {
                         </p>
                     </div>
                 </div>
+
+                {/* AI summary */}
+                {summariesEnabled && (
+                    <div className="rounded-xl px-8 md:px-12 py-8"
+                        style={{ background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--shadow)' }}>
+                        <p className="text-[10px] font-bold tracking-[0.4em] uppercase mb-4" style={{ color: 'var(--muted)' }}>AI summary</p>
+                        {summary ? (
+                            <div dir="auto" className="space-y-6 text-sm leading-relaxed" style={{ color: 'var(--text)' }}>
+                                <p>{summary.tldr}</p>
+                                {summary.key_points.length > 0 && (
+                                    <ul className="list-disc pl-5 space-y-1.5">
+                                        {summary.key_points.map((point, i) => <li key={i}>{point}</li>)}
+                                    </ul>
+                                )}
+                                {summary.chapters.length > 0 && (
+                                    <div>
+                                        <p className="text-[10px] font-bold tracking-[0.3em] uppercase mb-2" style={{ color: 'var(--muted)' }}>Chapters</p>
+                                        <ol className="space-y-1">
+                                            {summary.chapters.map(c => (
+                                                <li key={`${c.start_seconds}-${c.title}`} className="flex gap-3">
+                                                    {success.provider === 'youtube' ? (
+                                                        <a
+                                                            href={`https://www.youtube.com/watch?v=${encodeURIComponent(success.video_id)}&t=${c.start_seconds}s`}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="tabular-nums font-medium underline-offset-2 hover:underline"
+                                                            style={{ color: 'var(--primary)' }}
+                                                        >
+                                                            {fmtTimestamp(c.start_seconds)}
+                                                        </a>
+                                                    ) : (
+                                                        <span className="tabular-nums font-medium" style={{ color: 'var(--muted)' }}>{fmtTimestamp(c.start_seconds)}</span>
+                                                    )}
+                                                    <span>{c.title}</span>
+                                                </li>
+                                            ))}
+                                        </ol>
+                                    </div>
+                                )}
+                                <p className="text-xs" style={{ color: 'var(--muted)' }}>Generated by AI from the captions and may contain mistakes.</p>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                                <button
+                                    onClick={handleSummarize}
+                                    disabled={summaryLoading}
+                                    className="inline-flex items-center gap-3 px-8 py-4 font-bold text-[10px] uppercase tracking-widest transition-all rounded-full active:scale-[0.97] cursor-pointer disabled:opacity-40"
+                                    style={{ color: 'var(--text)', border: '1px solid var(--border)', background: 'transparent' }}
+                                >
+                                    {summaryLoading ? 'Summarizing...' : 'Summarize with AI'}
+                                </button>
+                                <p className="text-xs font-medium" style={{ color: summaryError ? 'var(--danger)' : 'var(--muted)' }}>
+                                    {summaryError ?? 'TL;DR, key points and chapters. Sends the transcript to Anthropic (Claude) to generate it.'}
+                                </p>
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* Download controls */}
                 <div className="rounded-xl px-8 md:px-12 py-8 flex flex-col sm:flex-row sm:flex-wrap items-start sm:items-center gap-4"
