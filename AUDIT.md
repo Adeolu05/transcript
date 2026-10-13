@@ -151,7 +151,7 @@ python -m venv venv
 # Windows: venv\Scripts\activate
 # Linux: source venv/bin/activate
 pip install -r requirements.txt
-PYTHONPATH=. python -m unittest discover -s tests -v
+PYTHONPATH=. python -m unittest discover -s tests -t . -v
 ```
 
 ---

@@ -9,23 +9,31 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from app.core.config import settings
 from app.utils.logging_config import logger
 
 # ---------------------------------------------------------------------------
 # Database location
 # ---------------------------------------------------------------------------
-_DB_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_DB_PATH = _DB_DIR / "metrics.db"
+_DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "metrics.db"
 
 # Thread-local storage for connections (SQLite is not thread-safe by default)
 _local = threading.local()
 
 
+def metrics_db_path() -> Path:
+    """METRICS_DB_PATH, else <project>/data/metrics.db. Resolved per connection, not at import."""
+    raw = (settings.metrics_db_path or "").strip()
+    return Path(raw) if raw else _DEFAULT_DB_PATH
+
+
 def _get_conn() -> sqlite3.Connection:
     """Return a thread-local SQLite connection, creating the DB if needed."""
-    if not hasattr(_local, "conn") or _local.conn is None:
-        _DB_DIR.mkdir(parents=True, exist_ok=True)
-        _local.conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+    path = metrics_db_path()
+    if getattr(_local, "conn", None) is None or getattr(_local, "path", None) != path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _local.conn = sqlite3.connect(str(path), check_same_thread=False)
+        _local.path = path
         _local.conn.row_factory = sqlite3.Row
         _local.conn.execute("PRAGMA journal_mode=WAL")
         _init_schema(_local.conn)

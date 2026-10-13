@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     # Telegram bot preview length
     preview_chars: int = 1500
 
+    # SQLite analytics store. Empty = <project>/data/metrics.db (tests point this at a temp file)
+    metrics_db_path: str = ""
+
     # Internal metrics dashboard
     metrics_username: str = "admin"
     metrics_password: str = "changeme"
