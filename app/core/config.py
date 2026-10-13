@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     rate_limit_download_requests: int = 200
     # AI summaries: counted only when Claude is actually called (cache hits are free)
     rate_limit_summarize_requests: int = 3
+    # AI cleanup + notes/blog/show-notes exports: counted only on a Claude call (cache hits are free)
+    rate_limit_enhance_requests: int = 3
 
     # AI summaries (Claude). Empty key = feature hidden and endpoint disabled.
     anthropic_api_key: str = ""
@@ -42,6 +44,14 @@ class Settings(BaseSettings):
     # ~50K tokens; longer transcripts are refused rather than silently truncated
     summary_max_input_chars: int = 200_000
     summary_timeout_seconds: float = 90.0
+
+    # AI cleanup + structured exports (reuse ANTHROPIC_API_KEY). Empty model = SUMMARY_MODEL.
+    enhance_model: str = ""
+    enhance_effort: str = "low"
+    # Cleanup returns the whole transcript, so it is capped lower than summaries (~12K tokens)
+    enhance_clean_max_input_chars: int = 50_000
+    enhance_clean_max_output_tokens: int = 20_000
+    enhance_timeout_seconds: float = 150.0
 
     # Optional shared store (e.g. redis://...). When set, rate limits are counted
     # across all Gunicorn workers + the Telegram bot, and bot preferences survive

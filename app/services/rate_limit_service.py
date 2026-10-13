@@ -31,6 +31,8 @@ class RateLimitService:
             return max(0, int(settings.rate_limit_download_requests))
         if bucket == "summarize":
             return max(0, int(settings.rate_limit_summarize_requests))
+        if bucket == "enhance":
+            return max(0, int(settings.rate_limit_enhance_requests))
         return max(0, int(settings.rate_limit_requests))
 
     def is_allowed(self, identifier: str, bucket: str = "extract") -> bool:

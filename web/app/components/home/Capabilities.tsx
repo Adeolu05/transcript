@@ -3,6 +3,7 @@ import React from 'react';
 const items = [
     { label: 'Sources', description: 'YouTube and Vimeo links' },
     { label: 'Output', description: 'TXT (default), PDF, DOCX, SRT, VTT' },
+    { label: 'AI', description: 'Summaries, cleanup, notes, blog posts (Claude)' },
     { label: 'Languages', description: '23 languages, auto-translated by YouTube' },
     { label: 'Formatting', description: 'Clean text or timestamps' },
     { label: 'Preview', description: 'Short preview before download' },
@@ -27,7 +28,7 @@ export function Capabilities() {
                     className="text-2xl md:text-3xl font-semibold tracking-tighter mb-2"
                     style={{ color: 'var(--text)' }}
                 >
-                    Built for fast extraction.
+                    Fast extraction, plus AI on top.
                 </h2>
                 <p
                     className="text-sm tracking-wide mb-14"

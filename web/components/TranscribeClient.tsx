@@ -33,6 +33,29 @@ interface Summary {
     chapters: { start_seconds: number; title: string }[];
 }
 
+interface EnhanceMode {
+    id: string;
+    label: string;
+}
+
+interface EnhanceResult {
+    mode: string;
+    label: string;
+    text: string;
+    cached: boolean;
+    pdf_supported: boolean;
+    word_count: number;
+    file_id: string;
+    file_download_url: string;
+}
+
+const ENHANCE_HINTS: Record<string, string> = {
+    clean: 'Punctuation, paragraphs and speaker labels',
+    study_notes: 'Sections, key ideas and review questions',
+    blog_post: 'An original article from the video',
+    show_notes: 'Description, takeaways and timestamps',
+};
+
 interface ErrorData {
     code: string;
     message: string;
@@ -114,6 +137,11 @@ export function TranscribeClient() {
     const [summary, setSummary] = useState<Summary | null>(null);
     const [summaryLoading, setSummaryLoading] = useState(false);
     const [summaryError, setSummaryError] = useState<string | null>(null);
+    const [enhanceModes, setEnhanceModes] = useState<EnhanceMode[]>([]);
+    const [enhanceLoading, setEnhanceLoading] = useState<string | null>(null);
+    const [enhanceResult, setEnhanceResult] = useState<EnhanceResult | null>(null);
+    const [enhanceError, setEnhanceError] = useState<string | null>(null);
+    const [enhanceDownloading, setEnhanceDownloading] = useState<string | null>(null);
     const resultRef = useRef<HTMLDivElement>(null);
 
     const API_BASE = PUBLIC_API_BASE;
@@ -133,6 +161,9 @@ export function TranscribeClient() {
                 if (!d.success) return;
                 if (d.file_ttl_hours) setFileTtlHours(d.file_ttl_hours);
                 setSummariesEnabled(Boolean(d.summaries_enabled));
+                if (d.enhance_enabled && Array.isArray(d.enhance_modes)) {
+                    setEnhanceModes(d.enhance_modes as EnhanceMode[]);
+                }
                 if (Array.isArray(d.languages) && d.languages.length) {
                     const list = d.languages as Language[];
                     setLanguages(list);
@@ -157,6 +188,8 @@ export function TranscribeClient() {
         setError(null);
         setSummary(null);
         setSummaryError(null);
+        setEnhanceResult(null);
+        setEnhanceError(null);
         trackEvent('extract_clicked', { include_timestamps: timestamps, language });
 
         const stepTimer = setInterval(() => {
@@ -275,9 +308,66 @@ export function TranscribeClient() {
         }
     };
 
+    const handleEnhance = async (mode: string) => {
+        if (!success) return;
+        setEnhanceLoading(mode);
+        setEnhanceError(null);
+        trackEvent('enhance_clicked', { mode, language: success.language });
+        try {
+            const res = await fetch(`${API_BASE}/api/v1/enhance`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_id: success.file_id, mode }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                setEnhanceResult(data as EnhanceResult);
+                trackEvent('enhance_succeeded', { mode, cached: Boolean(data.cached) });
+            } else {
+                setEnhanceError(data.error?.message ?? 'Could not generate this export. Try again later.');
+                trackEvent('enhance_failed', { mode, error_code: data.error?.code ?? 'UNKNOWN_ERROR' });
+            }
+        } catch {
+            setEnhanceError('Could not reach the server. Check your connection and try again.');
+            trackEvent('enhance_failed', { mode, error_code: 'NETWORK_ERROR' });
+        } finally {
+            setEnhanceLoading(null);
+        }
+    };
+
+    const handleEnhanceDownload = async (format: 'txt' | 'pdf' | 'docx') => {
+        if (!enhanceResult) return;
+        setEnhanceDownloading(format);
+        setEnhanceError(null);
+        trackEvent('download_clicked', { file_format: format, source: `ai_${enhanceResult.mode}` });
+        try {
+            if (format === 'txt') {
+                window.location.href = `${API_BASE}${enhanceResult.file_download_url}`;
+                return;
+            }
+            const res = await fetch(`${API_BASE}/api/v1/convert`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_id: enhanceResult.file_id, format }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                window.location.href = `${API_BASE}${data.file_download_url}`;
+            } else {
+                setEnhanceError(data.error?.message ?? `Could not generate ${format.toUpperCase()}. Try TXT or retry.`);
+            }
+        } catch {
+            setEnhanceError(`Could not generate ${format.toUpperCase()}. Try TXT or retry.`);
+        } finally {
+            setEnhanceDownloading(null);
+        }
+    };
+
     const handleReset = () => {
         setSummary(null);
         setSummaryError(null);
+        setEnhanceResult(null);
+        setEnhanceError(null);
         setState('idle');
         setUrl('');
         setSuccess(null);
@@ -548,6 +638,68 @@ export function TranscribeClient() {
                                 <p className="text-xs font-medium" style={{ color: summaryError ? 'var(--danger)' : 'var(--muted)' }}>
                                     {summaryError ?? 'TL;DR, key points and chapters. Sends the transcript to Anthropic (Claude) to generate it.'}
                                 </p>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* AI tools: cleanup + structured exports */}
+                {enhanceModes.length > 0 && (
+                    <div className="rounded-xl px-8 md:px-12 py-8"
+                        style={{ background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--shadow)' }}>
+                        <p className="text-[10px] font-bold tracking-[0.4em] uppercase mb-2" style={{ color: 'var(--muted)' }}>AI tools</p>
+                        <p className="text-xs font-medium mb-6" style={{ color: enhanceError ? 'var(--danger)' : 'var(--muted)' }}>
+                            {enhanceError ?? 'Turn this transcript into something ready to use. Sends the transcript to Anthropic (Claude) to generate it.'}
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {enhanceModes.map(m => (
+                                <button
+                                    key={m.id}
+                                    onClick={() => handleEnhance(m.id)}
+                                    disabled={enhanceLoading !== null}
+                                    className="text-left rounded-xl px-5 py-4 transition-all active:scale-[0.98] cursor-pointer disabled:opacity-40"
+                                    style={{
+                                        color: 'var(--text)',
+                                        border: `1px solid ${enhanceResult?.mode === m.id ? 'var(--primary)' : 'var(--border)'}`,
+                                        background: 'transparent',
+                                    }}
+                                >
+                                    <span className="block text-[10px] font-bold uppercase tracking-widest mb-1">
+                                        {enhanceLoading === m.id ? 'Generating...' : m.label}
+                                    </span>
+                                    <span className="block text-xs font-medium" style={{ color: 'var(--muted)' }}>
+                                        {ENHANCE_HINTS[m.id] ?? ''}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+
+                        {enhanceResult && (
+                            <div className="mt-8">
+                                <p className="text-[10px] font-bold tracking-[0.3em] uppercase mb-3" style={{ color: 'var(--muted)' }}>
+                                    {enhanceResult.label} &middot; {enhanceResult.word_count.toLocaleString()} words
+                                </p>
+                                <div
+                                    dir="auto"
+                                    className="px-6 py-6 overflow-y-auto text-sm leading-relaxed whitespace-pre-wrap rounded-lg"
+                                    style={{ maxHeight: '420px', color: 'var(--text)', background: 'var(--bg)', border: '1px solid var(--border)' }}
+                                >
+                                    {enhanceResult.text}
+                                </div>
+                                <div className="mt-4 flex flex-wrap items-center gap-3">
+                                    {(['txt', 'docx', 'pdf'] as const).map(fmt => (
+                                        <button
+                                            key={fmt}
+                                            onClick={() => handleEnhanceDownload(fmt)}
+                                            disabled={enhanceDownloading !== null || (fmt === 'pdf' && !enhanceResult.pdf_supported)}
+                                            className="inline-flex items-center gap-3 px-6 py-3 font-bold text-[10px] uppercase tracking-widest transition-all rounded-full active:scale-[0.97] cursor-pointer disabled:opacity-40"
+                                            style={{ color: 'var(--text)', border: '1px solid var(--border)', background: 'transparent' }}
+                                        >
+                                            {enhanceDownloading === fmt ? 'Preparing...' : `Download ${fmt.toUpperCase()}`}
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="mt-4 text-xs" style={{ color: 'var(--muted)' }}>Generated by AI from the captions and may contain mistakes. Speaker labels are inferred from the text.</p>
                             </div>
                         )}
                     </div>

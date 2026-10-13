@@ -19,7 +19,7 @@ export const metadata: Metadata = {
     template: "%s – Transcript Flow",
   },
   description:
-    "Extract and download YouTube and Vimeo transcripts. Preview before download. TXT, PDF, DOCX. No account required.",
+    "Extract YouTube and Vimeo transcripts, then clean, summarise or turn them into study notes and blog posts with AI. TXT, PDF, DOCX. No account required.",
   robots: { index: true, follow: true },
   alternates: { canonical: "/" },
   icons: {
@@ -31,7 +31,7 @@ export const metadata: Metadata = {
     siteName: "Transcript Flow",
     title: "YouTube & Vimeo Transcript Downloader",
     description:
-      "Extract and download YouTube and Vimeo transcripts. Preview before download. TXT, PDF, DOCX. No account required.",
+      "Extract YouTube and Vimeo transcripts, then clean, summarise or turn them into study notes and blog posts with AI. TXT, PDF, DOCX. No account required.",
     url: SITE_URL,
     images: [
       {

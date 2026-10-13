@@ -156,7 +156,7 @@ PRIVACY_TEXT = (
     "\\• Generated files auto\\-delete after about 1 hour\\.\n"
     "\\• Short\\-term caption cache \\(up to a few days\\) may reduce repeat fetches\\.\n"
     "\\• Your format, timestamp and language preference is remembered for about 90 days\\.\n"
-    "\\• AI summaries send the caption text to Anthropic \\(Claude\\), only when you ask\\.\n"
+    "\\• AI features send the caption text to Anthropic \\(Claude\\), only when you ask\\.\n"
     "\\• We do not keep permanent user accounts or history\\.\n"
     "\\• See the website privacy page for full details\\."
 )

@@ -92,6 +92,11 @@ def check_summarize_quota(request: Request) -> None:
     _raise_if_limited(_extract_client_ip(request), "summarize")
 
 
+def check_enhance_quota(request: Request) -> None:
+    """AI cleanup / notes exports: counted only on a cache miss (a real Claude call)."""
+    _raise_if_limited(_extract_client_ip(request), "enhance")
+
+
 # Back-compat alias used in older call sites / tests
 async def verify_rate_limit(request: Request):
     await verify_rate_limit_extract(request)

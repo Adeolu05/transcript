@@ -37,6 +37,9 @@ ALLOWED_EVENTS = {
     "summary_clicked",
     "summary_succeeded",
     "summary_failed",
+    "enhance_clicked",
+    "enhance_succeeded",
+    "enhance_failed",
     # Telegram
     "tg_link_received",
     "tg_extract_succeeded",
@@ -67,6 +70,8 @@ ALLOWED_PROPS = {
     "language",
     "translated",
     "cached",
+    "mode",
+    "source",
 }
 
 # Maximum payload size (bytes) — reject anything larger

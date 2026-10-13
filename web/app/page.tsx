@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { BotDemo } from './components/home/BotDemo';
 import { HowItFlows } from './components/home/HowItFlows';
 import { Capabilities } from './components/home/Capabilities';
+import { AiTools } from './components/home/AiTools';
+import { Pricing } from './components/home/Pricing';
 import { Navbar } from '../components/Navbar';
 import { JsonLd } from '../components/JsonLd';
 import { SiteFooter } from '../components/SiteFooter';
@@ -45,6 +47,8 @@ export default function Home() {
         links={[
           { label: 'Home', onClick: () => scrollToRef.current?.('#hero') },
           { label: 'App', href: '/app' },
+          { label: 'AI', onClick: () => scrollToRef.current?.('#ai') },
+          { label: 'Pricing', onClick: () => scrollToRef.current?.('#pricing') },
           { label: 'Telegram', href: 'https://t.me/TranscriptFlowBot' },
         ]}
       />
@@ -55,7 +59,7 @@ export default function Home() {
         <div className="flex flex-col md:flex-row md:pb-12 w-full pb-6 items-end justify-between" style={{ borderBottom: '1px solid var(--border)' }}>
           <div className="reveal-text md:mb-0 md:w-auto w-full mb-6">
             <p className="md:text-base leading-relaxed text-sm font-normal tracking-wide max-w-md mb-6" style={{ color: 'var(--muted)' }}>
-              Fast transcript extraction for YouTube and Vimeo. Paste a link. Get a clean file in seconds.
+              Paste a YouTube or Vimeo link. Get the transcript in seconds, then let Claude clean it up, summarise it, or turn it into study notes, a blog post or show notes.
             </p>
             <div className="flex flex-col gap-4">
               <div className="flex flex-wrap items-center gap-6">
@@ -117,8 +121,14 @@ export default function Home() {
       {/* How it flows */}
       <HowItFlows />
 
+      {/* AI tools */}
+      <AiTools />
+
       {/* Capabilities */}
       <Capabilities />
+
+      {/* Plans */}
+      <Pricing />
 
       {/* Bot Demo Section */}
       <section id="demo" className="relative z-10 py-20" style={{ background: 'var(--bg)', borderTop: '1px solid var(--border)' }}>
@@ -145,7 +155,7 @@ export default function Home() {
               </div>
               <div className="flex flex-col justify-between h-full">
                 <p className="md:text-xl leading-relaxed text-lg font-light tracking-tight max-w-xl mb-4" style={{ color: 'var(--muted)' }}>
-                  A simple extraction pipeline: fetch captions, format text, offer a download. No account on the web app; generated files are short-lived.
+                  A simple pipeline: fetch captions, format the text, optionally enhance it with Claude, offer a download. No account on the web app; generated files are short-lived.
                 </p>
 
                 <div className="grid grid-cols-3 gap-12 mt-12 pt-10" style={{ borderTop: '1px solid var(--border)' }}>
@@ -155,6 +165,8 @@ export default function Home() {
                       <span>extract stream</span>
                       <span className="opacity-50">↓</span>
                       <span>format output</span>
+                      <span className="opacity-50">↓</span>
+                      <span>enhance with ai</span>
                       <span className="opacity-50">↓</span>
                       <span>serve file</span>
                     </div>

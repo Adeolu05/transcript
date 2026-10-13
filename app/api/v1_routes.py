@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.dependencies import (
+    check_enhance_quota,
     check_summarize_quota,
     verify_rate_limit_convert,
     verify_rate_limit_download,
@@ -36,7 +37,7 @@ from app.services.file_service import (
 )
 from app.services.formatter_service import SUBTITLE_FORMATS, TranscriptFormatter
 from app.services.pdf_fonts import UnsupportedPdfScript, pdf_supported
-from app.services import summary_service
+from app.services import enhance_service, summary_service
 from app.services.metadata_service import MetadataService
 from app.services.telemetry_service import MAX_PAYLOAD_BYTES, TelemetryService
 from app.services.transcript_service import get_transcript_from_url
@@ -409,6 +410,11 @@ async def get_public_config():
             "default_language": DEFAULT_LANGUAGE,
             "languages": public_language_list(),
             "summaries_enabled": summary_service.summaries_enabled(),
+            "enhance_enabled": summary_service.summaries_enabled(),
+            "enhance_modes": [
+                {"id": mode_id, "label": info["label"]}
+                for mode_id, info in enhance_service.MODES.items()
+            ],
         }
     )
 
@@ -446,6 +452,81 @@ async def summarize(body: SummarizeRequest, request: Request):
         )
 
     return success_response({**summary, "provider": provider, "video_id": video_id, "cached": cached})
+
+
+class EnhanceRequest(BaseModel):
+    file_id: str
+    mode: str  # clean, study_notes, blog_post, show_notes
+
+
+@router.post("/enhance")
+async def enhance(body: EnhanceRequest, request: Request):
+    """
+    Claude-powered cleanup (punctuation, paragraphs, speaker labels) or a structured
+    export (study notes, blog post, show notes) of an extracted transcript. The result
+    is stored as a normal downloadable file, so /convert and /download work on it.
+    """
+    _validate_file_id(body.file_id)
+    if not summary_service.summaries_enabled():
+        raise AppError(ErrorCode.SUMMARY_UNAVAILABLE, "AI features aren't available right now.", 503)
+    if not enhance_service.is_valid_mode(body.mode):
+        raise AppError(ErrorCode.ENHANCE_FAILED, "Unknown export type.", 400)
+
+    meta = read_sidecar(body.file_id, "meta") or {}
+    segments = await asyncio.to_thread(read_sidecar, body.file_id, "segments")
+    if not isinstance(segments, list) or not meta.get("video_id"):
+        raise AppError(ErrorCode.FILE_EXPIRED, "Transcript not found or expired.", 404)
+
+    provider, video_id = meta.get("provider", "youtube"), meta["video_id"]
+    language = meta.get("language") or DEFAULT_LANGUAGE
+    title = meta.get("title") or ""
+
+    text = enhance_service.get_cached(provider, video_id, language, body.mode)
+    cached = text is not None
+    if not cached:
+        check_enhance_quota(request)
+        text = await asyncio.to_thread(
+            enhance_service.generate,
+            segments,
+            mode=body.mode,
+            provider=provider,
+            video_id=video_id,
+            language=language,
+            title=title,
+        )
+
+    # A fresh downloadable file (TXT) whose .raw sidecar feeds the PDF/DOCX converters
+    file_path = await asyncio.to_thread(FileGenerator.generate_file, text, "txt")
+    filename = os.path.basename(file_path)
+    (TEMP_DIR / f"{filename}.raw").write_text(text, encoding="utf-8")
+    label = enhance_service.MODES[body.mode]["title_suffix"]
+    write_sidecar(
+        filename,
+        "meta",
+        {
+            "title": f"{title} - {label}" if title else label,
+            "language": language,
+            "provider": provider,
+            "video_id": video_id,
+            "ai_mode": body.mode,
+        },
+    )
+    can_pdf = await asyncio.to_thread(pdf_supported, text)
+    metrics = MetadataService.calculate_metrics(text)
+
+    return success_response(
+        {
+            "mode": body.mode,
+            "label": enhance_service.MODES[body.mode]["label"],
+            "text": text,
+            "cached": cached,
+            "language": language,
+            "pdf_supported": can_pdf,
+            "word_count": metrics["word_count"],
+            "file_id": filename,
+            "file_download_url": f"/api/v1/download/{filename}",
+        }
+    )
 
 
 class EventRequest(BaseModel):
