@@ -7,10 +7,17 @@ via the application logger, ready for any log aggregator.
 
 import json
 import hashlib
+import hmac
+import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from app.core.config import settings
 from app.utils.logging_config import logger
+
+# Plain SHA-256 of an IPv4 address or Telegram ID is reversible by enumeration,
+# so identifiers are keyed. Without LOG_HASH_SECRET the key lives per process.
+_HASH_KEY = (settings.log_hash_secret or secrets.token_hex(32)).encode()
 
 # ---------------------------------------------------------------------------
 # Event allowlist
@@ -26,6 +33,7 @@ ALLOWED_EVENTS = {
     "download_succeeded",
     "download_failed",
     "new_transcript_clicked",
+    "language_changed",
     # Telegram
     "tg_link_received",
     "tg_extract_succeeded",
@@ -41,6 +49,8 @@ ALLOWED_EVENTS = {
     "tg_cmd_privacy",
     "tg_cmd_status",
     "tg_sample_clicked",
+    "tg_cmd_language",
+    "tg_language_set",
 }
 
 # Props keys we accept (everything else is stripped)
@@ -50,6 +60,8 @@ ALLOWED_PROPS = {
     "include_timestamps",
     "duration_seconds_bucket",
     "error_code",
+    "language",
+    "translated",
 }
 
 # Maximum payload size (bytes) — reject anything larger
@@ -73,8 +85,8 @@ def bucket_duration(seconds: Optional[int]) -> Optional[str]:
 
 
 def hash_identifier(raw: str) -> str:
-    """One-way SHA-256 hash of an identifier (e.g. Telegram user ID)."""
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+    """Keyed one-way hash of an identifier (IP, Telegram user ID) for logs."""
+    return hmac.new(_HASH_KEY, raw.encode(), hashlib.sha256).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------

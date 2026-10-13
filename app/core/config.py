@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     rate_limit_download_enabled: bool = False
     rate_limit_download_requests: int = 200
 
+    # Optional shared store (e.g. redis://...). When set, rate limits are counted
+    # across all Gunicorn workers + the Telegram bot, and bot preferences survive
+    # restarts. Empty or unreachable = per-process in-memory fallback.
+    redis_url: str = ""
+    telegram_prefs_ttl_days: int = 90
+
+    # Key for HMAC-hashing IPs / Telegram IDs in logs and telemetry. Unset = a
+    # random per-process key (hashes then only correlate within one process).
+    log_hash_secret: str = ""
+
     # Proxy security: how many trusted proxies sit in front of the app.
     # 0 = direct exposure (ignore X-Forwarded-For entirely, use socket IP).
     # 1 = one reverse proxy (Nginx, Cloudflare, etc.).
@@ -51,6 +61,10 @@ class Settings(BaseSettings):
     # In-process cleanup (primary on multi-service PaaS where cron cannot see API /tmp)
     in_process_cleanup_enabled: bool = True
     cleanup_interval_seconds: int = 900  # 15 minutes
+
+    # TTF used for PDFs whose text is beyond Helvetica's Western European set
+    # (Polish, Vietnamese, Cyrillic, Greek...). Empty = search common system paths.
+    pdf_font_path: str = ""
 
     # Telegram bot preview length
     preview_chars: int = 1500

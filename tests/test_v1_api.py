@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.core.errors import ErrorCode, TranscriptFetchError
 from app.main import app
+from app.services.rate_limit_service import rate_limiter
 
 client = TestClient(app)
 
@@ -25,6 +26,10 @@ _TRANSCRIPT = {
 
 
 class TestV1Extract(unittest.TestCase):
+
+    def setUp(self):
+        # All TestClient requests share one "IP"; other suites' extracts must not exhaust its quota
+        rate_limiter._store.clear()
     @patch("app.api.v1_routes.get_transcript_from_url")
     def test_extract_success_envelope(self, mock_fetch):
         mock_fetch.return_value = {**_TRANSCRIPT}
@@ -93,6 +98,10 @@ class TestV1Extract(unittest.TestCase):
 
 
 class TestV1Convert(unittest.TestCase):
+
+    def setUp(self):
+        # All TestClient requests share one "IP"; other suites' extracts must not exhaust its quota
+        rate_limiter._store.clear()
     @patch("app.api.v1_routes.get_transcript_from_url")
     def test_convert_txt_returns_download_url(self, mock_fetch):
         mock_fetch.return_value = {**_TRANSCRIPT}

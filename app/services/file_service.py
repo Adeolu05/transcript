@@ -11,6 +11,7 @@ from urllib.parse import quote
 from docx import Document
 
 from app.core.config import settings
+from app.services.pdf_fonts import pdf_font_for
 from app.utils.logging_config import logger
 
 
@@ -102,11 +103,17 @@ class FileGenerator:
         return str(filepath)
 
     @staticmethod
-    def generate_pdf(content: str) -> str:
+    def generate_pdf(content: str, language: str = "") -> str:
+        """Raises pdf_fonts.UnsupportedPdfScript for scripts ReportLab can't typeset."""
         from reportlab.lib.pagesizes import letter
         from reportlab.lib.styles import getSampleStyleSheet
         from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
         from reportlab.lib.units import inch
+
+        # Pick the font before creating the file so an unsupported script leaves nothing behind
+        font = pdf_font_for(content, language)
+        if font.drop:
+            content = "".join(ch for ch in content if ch not in font.drop)
 
         filepath = FileGenerator._get_temp_filepath("pdf")
 
@@ -121,7 +128,9 @@ class FileGenerator:
 
         story = []
         styles = getSampleStyleSheet()
-        style = styles["BodyText"]
+        style = styles["BodyText"].clone("Transcript", fontName=font.name)
+        if font.cjk_wrap:
+            style.wordWrap = "CJK"
 
         for para_text in content.split("\n\n"):
             if para_text.strip():
@@ -134,12 +143,12 @@ class FileGenerator:
         return str(filepath)
 
     @staticmethod
-    def generate_file(content: str, file_format: str) -> str:
+    def generate_file(content: str, file_format: str, language: str = "") -> str:
         """Returns the absolute path to the generated file on disk."""
         if file_format == "docx":
             return FileGenerator.generate_docx(content)
         if file_format == "pdf":
-            return FileGenerator.generate_pdf(content)
+            return FileGenerator.generate_pdf(content, language)
         if file_format in ("srt", "vtt"):
             return FileGenerator.generate_txt(content, file_format)
         return FileGenerator.generate_txt(content)

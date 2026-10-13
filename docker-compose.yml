@@ -41,8 +41,12 @@ services:
       FILE_STORAGE_DIR: /app/data/tmp
       TRANSCRIPT_CACHE_DIR: /app/data/transcript_cache
       IN_PROCESS_CLEANUP_ENABLED: "true"
+      REDIS_URL: redis://redis:6379/0
     volumes:
       - transcript_data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     logging:
       driver: json-file
@@ -76,6 +80,7 @@ services:
       TMPDIR: /tmp
       FILE_STORAGE_DIR: /app/data/tmp
       TRANSCRIPT_CACHE_DIR: /app/data/transcript_cache
+      REDIS_URL: redis://redis:6379/0
     volumes:
       - transcript_data:/app/data
     restart: unless-stopped
@@ -88,5 +93,20 @@ services:
       api:
         condition: service_healthy
 
+  # Shared rate-limit counters (all API workers + bot) and Telegram preferences
+  redis:
+    image: redis:7-alpine
+    container_name: transcriptflow-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "64mb", "--maxmemory-policy", "volatile-ttl"]
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
 volumes:
   transcript_data:
+  redis_data:

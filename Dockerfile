@@ -10,9 +10,13 @@ RUN groupadd --system --gid 1000 app \
 
 WORKDIR /app
 
-# System deps for reportlab / cffi
+# System deps for reportlab / cffi. PDF fonts: DejaVu Sans embeds Latin-extended,
+# Greek and Cyrillic (Helvetica only covers Western European); Nanum Gothic embeds
+# Korean (ReportLab's built-in Korean CID fonts render blank in Chrome's viewer)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
+    fonts-dejavu-core \
+    fonts-nanum \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

@@ -22,10 +22,13 @@ from app.services.transcript_service import get_transcript_from_url
 from app.services.formatter_service import SUBTITLE_FORMATS, TranscriptFormatter
 from app.services.file_service import FileGenerator, download_filename
 from app.services.rate_limit_service import check_rate_limit
+from app.services import user_prefs_service
 from app.services.metadata_service import MetadataService
 from app.services.extract_guardrails import enforce_transcript_guardrails
 from app.core.errors import AppError, ErrorCode, TranscriptFetchError
 from app.core.config import settings
+from app.core.languages import SUPPORTED_LANGUAGES, LANGUAGE_CODES, language_name, languages_match
+from app.services.pdf_fonts import UnsupportedPdfScript
 from app.utils.logging_config import logger
 from app.services.analytics_service import AnalyticsService
 from app.services.telemetry_service import TelemetryService, hash_identifier, bucket_duration
@@ -49,29 +52,18 @@ _URL_PATTERN = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# Per-user preferences (Phase 1 — in-memory)
-# ---------------------------------------------------------------------------
-_user_prefs: Dict[str, Dict] = {}
-
-# ---------------------------------------------------------------------------
 # Avatar path (bundled inside app/ for Docker availability)
 # ---------------------------------------------------------------------------
 _AVATAR_PATH = pathlib.Path(__file__).parent / "assets" / "telegram-avatar-1024.png"
 
 
 def _get_prefs(user_id: str) -> dict:
-    """Return preferences for *user_id*, creating defaults if absent."""
-    if user_id not in _user_prefs:
-        _user_prefs[user_id] = {
-            "last_file_format": "txt",
-            "last_include_timestamps": False,
-        }
-    return _user_prefs[user_id]
+    """Preferences for *user_id* (Redis-backed when REDIS_URL is set)."""
+    return user_prefs_service.get_prefs(user_id)
 
 
 def _set_pref(user_id: str, **kwargs) -> None:
-    prefs = _get_prefs(user_id)
-    prefs.update(kwargs)
+    user_prefs_service.set_prefs(user_id, **kwargs)
 
 
 def _emit_event(event_name: str, user_id: str, props: dict | None = None) -> None:
@@ -119,7 +111,7 @@ def _escape_md2(text: str) -> str:
 WELCOME_TEXT = (
     "*Transcript Flow*\n\n"
     "Turn YouTube or Vimeo videos into clean transcripts\\.\n\n"
-    "\\• YouTube: English captions only at this time\n"
+    "\\• 23 languages: YouTube auto\\-translates captions \\(/language\\)\n"
     "\\• TXT \\(default\\)\n"
     "\\• PDF / DOCX\n"
     "\\• SRT / VTT subtitles\n"
@@ -137,9 +129,10 @@ HELP_TEXT = (
     "2\\. Preview the transcript\\.\n"
     "3\\. Download as TXT, PDF, DOCX, SRT, or VTT\\.\n\n"
     "Power users:\n"
-    "`/extract <link>`\n\n"
+    "`/extract <link>`\n"
+    "`/language` to choose the transcript language\n\n"
     "If extraction fails:\n"
-    "\\• YouTube transcripts are English\\-only for now\\.\n"
+    "\\• Pick another language with /language\\.\n"
     "\\• Captions may be missing or unavailable for some videos\\.\n"
     "\\• Transcripts may be disabled for the video\\."
 )
@@ -160,7 +153,8 @@ PRIVACY_TEXT = (
     "*Privacy*\n\n"
     "\\• No account required\\.\n"
     "\\• Generated files auto\\-delete after about 1 hour\\.\n"
-    "\\• Short\\-term caption cache \\(hours\\) may reduce repeat fetches\\.\n"
+    "\\• Short\\-term caption cache \\(up to a few days\\) may reduce repeat fetches\\.\n"
+    "\\• Your format, timestamp and language preference is remembered for about 90 days\\.\n"
     "\\• We do not keep permanent user accounts or history\\.\n"
     "\\• See the website privacy page for full details\\."
 )
@@ -215,10 +209,24 @@ def _ready_keyboard(include_timestamps: bool) -> InlineKeyboardMarkup:
     )
 
 
-def _ready_text(title: str, duration_s: int, word_count: int, reading_time_s: int) -> str:
+def _language_label(transcript_data: dict, requested: str) -> str:
+    """e.g. "Español (auto-translated)" or "English (Español not available)"."""
+    actual = transcript_data.get("language") or requested
+    label = language_name(actual)
+    if transcript_data.get("translated"):
+        return f"{label} (auto-translated)"
+    if not languages_match(actual, requested):
+        return f"{label} ({language_name(requested)} not available)"
+    return label
+
+
+def _ready_text(
+    title: str, duration_s: int, word_count: int, reading_time_s: int, language: str
+) -> str:
     return (
         f"Transcript ready.\n\n"
         f"Title: {title}\n"
+        f"Language: {language}\n"
         f"Duration: {_duration_label(duration_s)}\n"
         f"Words: {word_count}\n"
         f"Read time: {_reading_time_label(reading_time_s)}"
@@ -236,18 +244,43 @@ def _start_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("Privacy", callback_data="privacy"),
             InlineKeyboardButton("Help", callback_data="help"),
         ],
+        [
+            InlineKeyboardButton("Language", callback_data="language"),
+        ],
     ])
 
 
-async def _build_file(transcript_data: dict, formatted_text: str, ext: str) -> str:
-    """Generate *ext* off the event loop (PDF builds can take seconds)."""
+def _language_keyboard(current: str) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(
+            f"{'✓ ' if code == current else ''}{native}", callback_data=f"lang|{code}"
+        )
+        for code, native, _ in SUPPORTED_LANGUAGES
+    ]
+    return InlineKeyboardMarkup([buttons[i:i + 3] for i in range(0, len(buttons), 3)])
+
+
+async def _build_file(
+    transcript_data: dict, formatted_text: str, ext: str
+) -> tuple[str, str]:
+    """
+    Generate *ext* off the event loop (PDF builds can take seconds).
+    Returns (path, ext actually produced): PDF falls back to DOCX for scripts
+    the PDF renderer can't typeset (Arabic, Hindi...).
+    """
     if ext in SUBTITLE_FORMATS:
         content = await asyncio.to_thread(
             TranscriptFormatter.format_subtitles, transcript_data["segments"], ext
         )
     else:
         content = formatted_text
-    return await asyncio.to_thread(FileGenerator.generate_file, content, ext)
+    language = transcript_data.get("language", "")
+    try:
+        path = await asyncio.to_thread(FileGenerator.generate_file, content, ext, language)
+        return path, ext
+    except UnsupportedPdfScript:
+        path = await asyncio.to_thread(FileGenerator.generate_file, content, "docx")
+        return path, "docx"
 
 
 def _extract_url_from_text(text: str) -> str | None:
@@ -295,6 +328,7 @@ async def _process_url(
     prefs = _get_prefs(user_id)
     file_ext = prefs["last_file_format"]
     include_ts = prefs["last_include_timestamps"]
+    language = prefs["language"]
     fmt_type = _format_type_for_prefs(include_ts)
     started = time.time()
 
@@ -306,14 +340,16 @@ async def _process_url(
             f"Extracting transcript\u2026\n"
             f"Provider: {platform}\n"
             f"Format: {file_ext}\n"
+            f"Language: {language_name(language)}\n"
             f"Timestamps: {_ts_label(include_ts)}"
         ),
     )
 
     try:
         # Extract (with timeout) -----------------------------------------
+        deadline = time.monotonic() + settings.transcript_timeout_seconds
         transcript_data = await asyncio.wait_for(
-            asyncio.to_thread(get_transcript_from_url, url),
+            asyncio.to_thread(get_transcript_from_url, url, deadline, language),
             timeout=settings.transcript_timeout_seconds,
         )
 
@@ -333,7 +369,7 @@ async def _process_url(
         await status_msg.edit_text("Transcript Flow\n\nPreparing file\u2026")
 
         video_id = transcript_data.get("video_id", "unknown")
-        file_path = await _build_file(transcript_data, formatted_text, file_ext)
+        file_path, file_ext = await _build_file(transcript_data, formatted_text, file_ext)
 
         # State D — Ready ------------------------------------------------
         ready = _ready_text(
@@ -341,6 +377,7 @@ async def _process_url(
             duration,
             metrics["word_count"],
             metrics["reading_time_seconds"],
+            _language_label(transcript_data, language),
         )
         await status_msg.edit_text(ready, reply_markup=_ready_keyboard(include_ts))
 
@@ -359,6 +396,8 @@ async def _process_url(
         processing_time_ms = int((time.time() - started) * 1000)
         _emit_event("tg_extract_succeeded", user_id, {
             "provider": platform,
+            "language": transcript_data.get("language"),
+            "translated": bool(transcript_data.get("translated")),
             "duration_seconds_bucket": bucket_duration(duration),
             "file_format": file_ext,
         })
@@ -471,6 +510,38 @@ async def privacy_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(PRIVACY_TEXT, parse_mode="MarkdownV2")
 
 
+async def _send_language_picker(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: str) -> None:
+    current = _get_prefs(user_id)["language"]
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f"Transcript language: {language_name(current)}\n\n"
+            "Pick a language. If a video has no captions in it, YouTube auto-translates. "
+            "Vimeo can only use the captions the uploader added."
+        ),
+        reply_markup=_language_keyboard(current),
+    )
+
+
+async def language_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = str(update.effective_user.id)
+    _emit_event("tg_cmd_language", user_id)
+    await _send_language_picker(context, update.effective_chat.id, user_id)
+
+
+async def _handle_language_choice(query, code: str) -> None:
+    if code not in LANGUAGE_CODES:
+        await query.answer()
+        return
+    user_id = str(query.from_user.id)
+    _set_pref(user_id, language=code)
+    _emit_event("tg_language_set", user_id, {"language": code})
+    await query.answer(f"Language: {language_name(code)}")
+    await query.edit_message_text(
+        f"Transcript language: {language_name(code)}\n\nSend a link \u2014 it applies from your next transcript.",
+    )
+
+
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     _emit_event("tg_cmd_status", str(update.effective_user.id))
 
@@ -534,6 +605,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             text=FORMATS_TEXT,
             parse_mode="MarkdownV2",
         )
+
+    elif data == "language":
+        await query.answer()
+        await _send_language_picker(context, query.message.chat_id, str(query.from_user.id))
+
+    elif data.startswith("lang|"):
+        await _handle_language_choice(query, data.split("|", 1)[1])
 
     elif data == "privacy":
         await query.answer()
@@ -605,7 +683,13 @@ async def _handle_download(query, context: ContextTypes.DEFAULT_TYPE, ext: str) 
         if ext == context.user_data.get("file_ext") and cached_path and os.path.exists(cached_path):
             file_path = cached_path
         else:
-            file_path = await _build_file(transcript_data, formatted_text, ext)
+            file_path, built_ext = await _build_file(transcript_data, formatted_text, ext)
+            if built_ext != ext:
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text="PDF isn't available for this language yet, so here's a DOCX instead.",
+                )
+                ext = built_ext
 
         # Send file -------------------------------------------------------
         with open(file_path, "rb") as f:
@@ -718,7 +802,7 @@ async def _handle_timestamp_toggle(query, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Regenerate file in current preferred format -------------------------
     file_ext = prefs["last_file_format"]
-    file_path = await _build_file(transcript_data, formatted_text, file_ext)
+    file_path, file_ext = await _build_file(transcript_data, formatted_text, file_ext)
 
     # Update cache --------------------------------------------------------
     context.user_data["formatted_text"] = formatted_text
@@ -732,6 +816,7 @@ async def _handle_timestamp_toggle(query, context: ContextTypes.DEFAULT_TYPE) ->
         transcript_data.get("duration_seconds", 0),
         metrics["word_count"],
         metrics["reading_time_seconds"],
+        _language_label(transcript_data, prefs["language"]),
     )
     try:
         await context.bot.edit_message_text(
@@ -796,6 +881,7 @@ def run_bot() -> None:
     application.add_handler(CommandHandler("formats", formats_cmd))
     application.add_handler(CommandHandler("privacy", privacy_cmd))
     application.add_handler(CommandHandler("status", status_cmd))
+    application.add_handler(CommandHandler("language", language_cmd))
 
     # Plain-text message handler (catches raw links)
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_plain_text))

@@ -32,6 +32,11 @@ services:
         value: "false"
       - key: TRUSTED_PROXY_COUNT
         value: "1"
+      # Point at a Render Key Value (Redis) instance so limits are shared across workers
+      - key: REDIS_URL
+        sync: false
+      - key: LOG_HASH_SECRET
+        generateValue: true
       - key: MAX_VIDEO_DURATION_SECONDS
         value: "10800"
       - key: TRANSCRIPT_TIMEOUT_SECONDS
